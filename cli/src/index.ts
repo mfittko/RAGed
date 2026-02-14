@@ -71,8 +71,12 @@ async function readFileContent(filePath: string, docType: string): Promise<{ tex
   
   if (docType === "image") {
     const buffer = await fs.readFile(filePath);
+    const fileSizeBytes = buffer.length;
     const base64 = buffer.toString("base64");
-    const metadata: Record<string, any> = { format: path.extname(filePath).slice(1) };
+    const metadata: Record<string, any> = { 
+      format: path.extname(filePath).slice(1),
+      sizeBytes: fileSizeBytes 
+    };
     
     try {
       const image = sharp(buffer);
@@ -336,9 +340,9 @@ async function cmdIngest(options: any) {
       
       const { text, metadata = {} } = await readFileContent(filePath, docType);
       
-      // Warn about large images
-      if (docType === "image" && text.length > LARGE_IMAGE_THRESHOLD_BYTES) {
-        console.warn(`[rag-index] Warning: Large image file (${Math.round(text.length / 1024)}KB) will be base64-encoded: ${filePath}`);
+      // Warn about large images (check original file size from metadata)
+      if (docType === "image" && metadata.sizeBytes && metadata.sizeBytes > LARGE_IMAGE_THRESHOLD_BYTES) {
+        console.warn(`[rag-index] Warning: Large image file (${Math.round(metadata.sizeBytes / 1024)}KB) will be base64-encoded: ${filePath}`);
       }
       
       const fileName = path.basename(filePath);
@@ -378,8 +382,8 @@ async function cmdEnrich(options: any) {
   const showFailed = Boolean(options.showFailed);
   const retryFailed = Boolean(options.retryFailed);
 
-  if (showFailed) {
-    // Get enrichment stats
+  if (showFailed || !retryFailed) {
+    // Get enrichment stats (shown by default unless retrying failed)
     const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/stats`, {
       method: "GET",
       headers: authHeaders(token),
@@ -403,6 +407,10 @@ async function cmdEnrich(options: any) {
     console.log(`  Processing: ${stats.totals.processing}`);
     console.log(`  None: ${stats.totals.none}`);
     console.log("");
+  }
+
+  if (showFailed) {
+    // Only show stats, don't enqueue
     return;
   }
 
