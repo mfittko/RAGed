@@ -3,21 +3,77 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
-import minimist from "minimist";
+import { Command } from "commander";
+import sharp from "sharp";
 
-type IngestItem = { id?: string; text: string; source: string; metadata?: Record<string, any>; };
+type IngestItem = { 
+  id?: string; 
+  text: string; 
+  source: string; 
+  metadata?: Record<string, any>;
+  docType?: string;
+  enrich?: boolean;
+};
 
-function usage() {
-  console.log(`rag-index
+function detectDocType(filePath: string, content?: Buffer): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const extMap: Record<string, string> = {
+    ".md": "text", ".markdown": "text", ".txt": "text",
+    ".ts": "code", ".tsx": "code", ".js": "code", ".jsx": "code",
+    ".py": "code", ".go": "code", ".java": "code", ".cpp": "code", ".c": "code",
+    ".json": "code", ".yml": "code", ".yaml": "code", ".toml": "code",
+    ".pdf": "pdf",
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image",
+  };
+  
+  // Check for Slack export structure
+  if (filePath.includes("slack") && ext === ".json") {
+    return "slack";
+  }
+  
+  return extMap[ext] ?? "text";
+}
 
-Usage:
-  rag-index index --repo <git-url> [--api <url>] [--collection <name>] [--branch <name>] [--repoId <id>] [--token <token>]
-  rag-index query --q "<text>" [--api <url>] [--collection <name>] [--topK <n>] [--repoId <id>] [--pathPrefix <prefix>] [--lang <lang>] [--token <token>]
-
-Defaults:
-  --api http://localhost:8080
-  --collection docs
-`);
+async function readFileContent(filePath: string, docType: string): Promise<{ text: string; metadata?: Record<string, any> }> {
+  if (docType === "pdf") {
+    const buffer = await fs.readFile(filePath);
+    // Dynamic import to handle module resolution
+    const pdfModule: any = await import("pdf-parse");
+    const parsePdf = pdfModule.default || pdfModule;
+    const data = await parsePdf(buffer);
+    return {
+      text: data.text,
+      metadata: {
+        title: data.info?.Title,
+        author: data.info?.Author,
+        pageCount: data.numpages,
+      },
+    };
+  }
+  
+  if (docType === "image") {
+    const buffer = await fs.readFile(filePath);
+    const base64 = buffer.toString("base64");
+    const metadata: Record<string, any> = { format: path.extname(filePath).slice(1) };
+    
+    try {
+      const image = sharp(buffer);
+      const meta = await image.metadata();
+      metadata.width = meta.width;
+      metadata.height = meta.height;
+      if (meta.exif) {
+        metadata.exif = meta.exif;
+      }
+    } catch (e) {
+      // Ignore EXIF errors
+    }
+    
+    return { text: base64, metadata };
+  }
+  
+  // For text and code files
+  const text = await fs.readFile(filePath, "utf-8");
+  return { text };
 }
 
 function run(cmd: string, args: string[], cwd?: string): Promise<void> {
@@ -108,21 +164,26 @@ async function query(api: string, collection: string, q: string, topK: number, f
   return await res.json();
 }
 
-async function cmdIndex(argv: any) {
-  const repoUrl = argv.repo || argv.r;
-  const api = argv.api || "http://localhost:8080";
-  const token = argv.token ? String(argv.token) : undefined;
-  const collection = argv.collection || "docs";
-  const branch = argv.branch || "";
-  const maxFiles = Number(argv.maxFiles || 4000);
-  const maxBytes = Number(argv.maxBytes || 500_000);
-  const keep = Boolean(argv.keep);
-  const repoId = String(argv.repoId || repoUrl);
+async function cmdIndex(options: any) {
+  const repoUrl = options.repo;
+  const api = options.api || "http://localhost:8080";
+  const token = options.token;
+  const collection = options.collection || "docs";
+  const branch = options.branch || "";
+  const maxFiles = Number(options.maxFiles || 4000);
+  const maxBytes = Number(options.maxBytes || 500_000);
+  const keep = Boolean(options.keep);
+  const repoId = String(options.repoId || repoUrl);
+  const enrich = options.enrich !== false; // default true
+  const docType = options.docType;
 
-  const includePrefix = argv.include ? String(argv.include) : undefined;
-  const excludePrefix = argv.exclude ? String(argv.exclude) : undefined;
+  const includePrefix = options.include;
+  const excludePrefix = options.exclude;
 
-  if (!repoUrl) { usage(); process.exit(2); }
+  if (!repoUrl) {
+    console.error("Error: --repo is required");
+    process.exit(2);
+  }
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "rag-index-"));
   const repoDir = path.join(tmp, "repo");
@@ -151,12 +212,17 @@ async function cmdIndex(argv: any) {
       const text = await fs.readFile(f, "utf-8").catch(() => "");
       if (!text.trim()) continue;
 
-      items.push({
+      const item: IngestItem = {
         id: `${repoId}:${rel}`,
         text,
         source: `${repoUrl}#${rel}`,
         metadata: { repoId, repoUrl, path: rel, lang: extToLang(f), bytes: st.size },
-      });
+      };
+      
+      if (docType) item.docType = docType;
+      if (enrich !== undefined) item.enrich = enrich;
+      
+      items.push(item);
 
       if (items.length >= 50) {
         console.log(`[rag-index] Ingesting batch (${items.length})...`);
@@ -175,17 +241,20 @@ async function cmdIndex(argv: any) {
   }
 }
 
-async function cmdQuery(argv: any) {
-  const api = argv.api || "http://localhost:8080";
-  const token = argv.token ? String(argv.token) : undefined;
-  const collection = argv.collection || "docs";
-  const q = argv.q || argv.query;
-  const topK = Number(argv.topK || 8);
-  const repoId = argv.repoId ? String(argv.repoId) : undefined;
-  const pathPrefix = argv.pathPrefix ? String(argv.pathPrefix) : undefined;
-  const lang = argv.lang ? String(argv.lang) : undefined;
+async function cmdQuery(options: any) {
+  const api = options.api || "http://localhost:8080";
+  const token = options.token;
+  const collection = options.collection || "docs";
+  const q = options.q || options.query;
+  const topK = Number(options.topK || 8);
+  const repoId = options.repoId;
+  const pathPrefix = options.pathPrefix;
+  const lang = options.lang;
 
-  if (!q) { usage(); process.exit(2); }
+  if (!q) {
+    console.error("Error: --q or --query is required");
+    process.exit(2);
+  }
 
   const filter = qdrantFilter({ repoId, pathPrefix, lang });
   const out = await query(api, collection, String(q), topK, filter, token);
@@ -202,16 +271,247 @@ async function cmdQuery(argv: any) {
   });
 }
 
+async function cmdIngest(options: any) {
+  const api = options.api || "http://localhost:8080";
+  const token = options.token;
+  const collection = options.collection || "docs";
+  const file = options.file;
+  const dir = options.dir;
+  const enrich = options.enrich !== false;
+  const docTypeOverride = options.docType;
+
+  if (!file && !dir) {
+    console.error("Error: --file or --dir is required");
+    process.exit(2);
+  }
+
+  const filesToProcess: string[] = [];
+  
+  if (file) {
+    filesToProcess.push(file);
+  } else if (dir) {
+    const allFiles = await listFiles(dir);
+    filesToProcess.push(...allFiles);
+  }
+
+  const items: IngestItem[] = [];
+  
+  for (const filePath of filesToProcess) {
+    try {
+      const docType = docTypeOverride || detectDocType(filePath);
+      const { text, metadata = {} } = await readFileContent(filePath, docType);
+      
+      const fileName = path.basename(filePath);
+      const item: IngestItem = {
+        id: `file:${fileName}`,
+        text,
+        source: filePath,
+        metadata: { ...metadata, fileName, filePath },
+        docType,
+        enrich,
+      };
+      
+      items.push(item);
+      
+      if (items.length >= 10) {
+        console.log(`[rag-index] Ingesting batch (${items.length})...`);
+        await ingest(api, collection, items.splice(0, items.length), token);
+      }
+    } catch (err) {
+      console.error(`[rag-index] Error processing ${filePath}:`, err);
+    }
+  }
+
+  if (items.length) {
+    console.log(`[rag-index] Ingesting final batch (${items.length})...`);
+    await ingest(api, collection, items, token);
+  }
+  
+  console.log(`[rag-index] Done. Processed ${filesToProcess.length} files.`);
+}
+
+async function cmdEnrich(options: any) {
+  const api = options.api || "http://localhost:8080";
+  const token = options.token;
+  const collection = options.collection || "docs";
+  const force = Boolean(options.force);
+  const showFailed = Boolean(options.showFailed);
+  const retryFailed = Boolean(options.retryFailed);
+
+  if (showFailed || !retryFailed) {
+    // Get enrichment stats
+    const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/stats`, {
+      method: "GET",
+      headers: authHeaders(token),
+    });
+    
+    if (!res.ok) {
+      console.error(`Failed to get stats: ${res.status} ${await res.text()}`);
+      process.exit(1);
+    }
+    
+    const stats = await res.json();
+    console.log("\n=== Enrichment Statistics ===");
+    console.log(`Queue:`);
+    console.log(`  Pending: ${stats.queue.pending}`);
+    console.log(`  Processing: ${stats.queue.processing}`);
+    console.log(`  Dead Letter: ${stats.queue.deadLetter}`);
+    console.log(`\nTotals:`);
+    console.log(`  Enriched: ${stats.totals.enriched}`);
+    console.log(`  Failed: ${stats.totals.failed}`);
+    console.log(`  Pending: ${stats.totals.pending}`);
+    console.log(`  Processing: ${stats.totals.processing}`);
+    console.log(`  None: ${stats.totals.none}`);
+    console.log("");
+  }
+
+  if (!showFailed) {
+    // Enqueue enrichment tasks
+    const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/enqueue`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(token) },
+      body: JSON.stringify({ collection, force }),
+    });
+    
+    if (!res.ok) {
+      console.error(`Failed to enqueue: ${res.status} ${await res.text()}`);
+      process.exit(1);
+    }
+    
+    const result = await res.json();
+    console.log(`[rag-index] Enqueued ${result.enqueued} tasks for enrichment.`);
+  }
+}
+
+async function cmdGraph(options: any) {
+  const api = options.api || "http://localhost:8080";
+  const token = options.token;
+  const entity = options.entity;
+
+  if (!entity) {
+    console.error("Error: --entity is required");
+    process.exit(2);
+  }
+
+  const res = await fetch(`${api.replace(/\/$/, "")}/graph/entity/${encodeURIComponent(entity)}`, {
+    method: "GET",
+    headers: authHeaders(token),
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      console.log(`Entity "${entity}" not found in the knowledge graph.`);
+      return;
+    }
+    if (res.status === 503) {
+      console.error("Graph functionality is not enabled (Neo4j not configured).");
+      process.exit(1);
+    }
+    console.error(`Failed to get entity: ${res.status} ${await res.text()}`);
+    process.exit(1);
+  }
+
+  const data = await res.json();
+  
+  console.log(`\n=== Entity: ${data.entity.name} ===`);
+  console.log(`Type: ${data.entity.type}`);
+  if (data.entity.description) {
+    console.log(`Description: ${data.entity.description}`);
+  }
+  
+  if (data.connections && data.connections.length > 0) {
+    console.log(`\n=== Connections (${data.connections.length}) ===`);
+    data.connections.forEach((conn: any) => {
+      const arrow = conn.direction === "outgoing" ? "→" : "←";
+      console.log(`  ${arrow} ${conn.entity} (${conn.relationship})`);
+    });
+  }
+  
+  if (data.documents && data.documents.length > 0) {
+    console.log(`\n=== Related Documents (${data.documents.length}) ===`);
+    data.documents.slice(0, 10).forEach((doc: any) => {
+      console.log(`  - ${doc.id}`);
+    });
+    if (data.documents.length > 10) {
+      console.log(`  ... and ${data.documents.length - 10} more`);
+    }
+  }
+  console.log("");
+}
+
 async function main() {
-  const argv = minimist(process.argv.slice(2));
-  const cmd = argv._[0];
+  const program = new Command();
+  
+  program
+    .name("rag-index")
+    .description("CLI tool for indexing repositories and querying the RAG API")
+    .version("0.5.0");
 
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { usage(); return; }
-  if (cmd === "index") return await cmdIndex(argv);
-  if (cmd === "query") return await cmdQuery(argv);
+  program
+    .command("index")
+    .description("Clone a Git repository and index its files")
+    .requiredOption("--repo <url>", "Git URL to clone")
+    .option("--api <url>", "RAG API URL", "http://localhost:8080")
+    .option("--collection <name>", "Qdrant collection name", "docs")
+    .option("--branch <name>", "Git branch to clone")
+    .option("--repoId <id>", "Stable identifier for this repo")
+    .option("--token <token>", "Bearer token for auth")
+    .option("--include <prefix>", "Only index files matching this path prefix")
+    .option("--exclude <prefix>", "Skip files matching this path prefix")
+    .option("--maxFiles <n>", "Maximum files to process", "4000")
+    .option("--maxBytes <n>", "Maximum file size in bytes", "500000")
+    .option("--keep", "Keep the cloned temp directory", false)
+    .option("--enrich", "Enable enrichment (default: true)", true)
+    .option("--no-enrich", "Disable enrichment")
+    .option("--doc-type <type>", "Override document type detection")
+    .action(cmdIndex);
 
-  usage();
-  process.exit(2);
+  program
+    .command("query")
+    .description("Search the RAG API for relevant chunks")
+    .requiredOption("--q <text>", "Search query text")
+    .option("--api <url>", "RAG API URL", "http://localhost:8080")
+    .option("--collection <name>", "Qdrant collection name", "docs")
+    .option("--topK <n>", "Number of results to return", "8")
+    .option("--repoId <id>", "Filter by repository ID")
+    .option("--pathPrefix <prefix>", "Filter by file path prefix")
+    .option("--lang <lang>", "Filter by language")
+    .option("--token <token>", "Bearer token for auth")
+    .action(cmdQuery);
+
+  program
+    .command("ingest")
+    .description("Ingest arbitrary files (PDFs, images, text)")
+    .option("--file <path>", "Single file to ingest")
+    .option("--dir <path>", "Directory to ingest")
+    .option("--api <url>", "RAG API URL", "http://localhost:8080")
+    .option("--collection <name>", "Qdrant collection name", "docs")
+    .option("--token <token>", "Bearer token for auth")
+    .option("--enrich", "Enable enrichment (default: true)", true)
+    .option("--no-enrich", "Disable enrichment")
+    .option("--doc-type <type>", "Override document type detection")
+    .action(cmdIngest);
+
+  program
+    .command("enrich")
+    .description("Trigger and monitor enrichment tasks")
+    .option("--api <url>", "RAG API URL", "http://localhost:8080")
+    .option("--collection <name>", "Qdrant collection name", "docs")
+    .option("--token <token>", "Bearer token for auth")
+    .option("--force", "Re-enqueue already-enriched items", false)
+    .option("--show-failed", "Show failed enrichment stats only", false)
+    .option("--retry-failed", "Retry failed enrichments", false)
+    .action(cmdEnrich);
+
+  program
+    .command("graph")
+    .description("Query the knowledge graph for entity information")
+    .requiredOption("--entity <name>", "Entity name to look up")
+    .option("--api <url>", "RAG API URL", "http://localhost:8080")
+    .option("--token <token>", "Bearer token for auth")
+    .action(cmdGraph);
+
+  await program.parseAsync(process.argv);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
