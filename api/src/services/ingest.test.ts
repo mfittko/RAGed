@@ -222,10 +222,11 @@ describe("ingest service", () => {
     // Verify tasks were enqueued
     expect(mockEnqueue).toHaveBeenCalledTimes(2);
 
-    // Verify enrichmentStatus in payload
-    const points = (upsertMock.mock.calls[0] as any)[1];
-    expect(points[0].payload.enrichmentStatus).toBe("pending");
-    expect(points[1].payload.enrichmentStatus).toBe("pending");
+    // Verify enrichmentStatus in payload - collect all points from all upsert calls
+    const allPoints = upsertMock.mock.calls.flatMap((call: any) => call[1]);
+    expect(allPoints.length).toBe(2);
+    expect(allPoints[0].payload.enrichmentStatus).toBe("pending");
+    expect(allPoints[1].payload.enrichmentStatus).toBe("pending");
 
     // Clean up
     mockIsEnabled.mockReturnValue(false);

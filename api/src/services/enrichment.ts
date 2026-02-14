@@ -51,6 +51,18 @@ export interface EnqueueResult {
 
 export interface EnrichmentDeps {
   collectionName: (name?: string) => string;
+  scrollPointsPage: (
+    collection: string,
+    filter?: Record<string, unknown>,
+    limit?: number,
+    offset?: string | number | Record<string, unknown> | null,
+  ) => Promise<{
+    points: Array<{
+      id: string;
+      payload?: Record<string, unknown>;
+    }>;
+    nextOffset: string | number | Record<string, unknown> | null;
+  }>;
   scrollPoints: (
     collection: string,
     filter?: Record<string, unknown>,
@@ -159,7 +171,7 @@ export async function getEnrichmentStatus(
 }
 
 export async function getEnrichmentStats(
-  deps: Pick<EnrichmentDeps, "getQueueLength" | "scrollPoints" | "collectionName">,
+  deps: Pick<EnrichmentDeps, "getQueueLength" | "scrollPointsPage" | "collectionName">,
 ): Promise<EnrichmentStatsResult> {
   // Get queue lengths from Redis
   const [pending, deadLetter] = await Promise.all([
@@ -167,12 +179,10 @@ export async function getEnrichmentStats(
     deps.getQueueLength("enrichment:dead-letter"),
   ]);
 
-  // Count processing items by scrolling through collection
-  // Note: This uses a high limit for initial implementation. For very large
-  // collections (>10k items), consider implementing pagination or caching.
+  // Stream through collection in pages to avoid loading all points into memory
   const col = deps.collectionName();
-  const allPoints = await deps.scrollPoints(col, undefined, 10000);
-
+  const PAGE_SIZE = 500;
+  
   const totals = {
     enriched: 0,
     failed: 0,
@@ -181,11 +191,22 @@ export async function getEnrichmentStats(
     none: 0,
   };
 
-  for (const point of allPoints) {
-    const status = (point.payload?.enrichmentStatus as string) || "none";
-    if (status in totals) {
-      totals[status as keyof typeof totals]++;
+  let offset: string | number | Record<string, unknown> | null = null;
+
+  while (true) {
+    const page = await deps.scrollPointsPage(col, undefined, PAGE_SIZE, offset);
+    
+    for (const point of page.points) {
+      const status = (point.payload?.enrichmentStatus as string) || "none";
+      if (status in totals) {
+        totals[status as keyof typeof totals]++;
+      }
     }
+
+    if (page.nextOffset === null) {
+      break;
+    }
+    offset = page.nextOffset;
   }
 
   return {
@@ -216,45 +237,79 @@ export async function enqueueEnrichment(
         ],
       };
 
-  // Note: This uses a high limit for initial implementation. For very large
-  // collections (>10k items), consider implementing pagination or batching.
-  const points = await deps.scrollPoints(col, filter, 10000);
-
-  // Compute totalChunks per baseId so document-level extraction runs only once
+  // Stream through collection in pages to avoid loading all points into memory
+  const PAGE_SIZE = 500;
+  const BATCH_SIZE = 100;
+  
+  let enqueued = 0;
   const baseIdToTotalChunks = new Map<string, number>();
-  for (const point of points) {
-    const payload = point.payload;
-    if (!payload) continue;
-    const baseId = extractBaseId(point.id);
-    const current = baseIdToTotalChunks.get(baseId) ?? 0;
-    baseIdToTotalChunks.set(baseId, current + 1);
+  const pendingTasks: EnrichmentTask[] = [];
+
+  let offset: string | number | Record<string, unknown> | null = null;
+
+  // First pass: count chunks per baseId across the entire filtered dataset
+  while (true) {
+    const page = await deps.scrollPointsPage(col, filter, PAGE_SIZE, offset);
+
+    for (const point of page.points) {
+      const baseId = extractBaseId(point.id);
+      const current = baseIdToTotalChunks.get(baseId) ?? 0;
+      baseIdToTotalChunks.set(baseId, current + 1);
+    }
+
+    if (page.nextOffset === null) {
+      break;
+    }
+    offset = page.nextOffset;
   }
 
-  let enqueued = 0;
-  for (const point of points) {
-    const payload = point.payload;
-    if (!payload) continue;
+  // Second pass: build and enqueue tasks with correct totalChunks values
+  offset = null;
+  while (true) {
+    const page = await deps.scrollPointsPage(col, filter, PAGE_SIZE, offset);
 
-    const baseId = extractBaseId(point.id);
-    const totalChunks = baseIdToTotalChunks.get(baseId) ?? 1;
+    for (const point of page.points) {
+      const payload = point.payload;
+      if (!payload) continue;
 
-    const task: EnrichmentTask = {
-      taskId: randomUUID(),
-      qdrantId: point.id,
-      collection: col,
-      docType: (payload.docType as string) || "text",
-      baseId,
-      chunkIndex: (payload.chunkIndex as number) || 0,
-      totalChunks,
-      text: (payload.text as string) || "",
-      source: (payload.source as string) || "",
-      tier1Meta: (payload.tier1Meta as Record<string, unknown>) || {},
-      attempt: 1,
-      enqueuedAt: new Date().toISOString(),
-    };
+      const baseId = extractBaseId(point.id);
+      const totalChunks = baseIdToTotalChunks.get(baseId) ?? 1;
 
-    await deps.enqueueTask(task);
-    enqueued++;
+      const task: EnrichmentTask = {
+        taskId: randomUUID(),
+        qdrantId: point.id,
+        collection: col,
+        docType: (payload.docType as string) || "text",
+        baseId,
+        chunkIndex: (payload.chunkIndex as number) || 0,
+        totalChunks,
+        text: (payload.text as string) || "",
+        source: (payload.source as string) || "",
+        tier1Meta: (payload.tier1Meta as Record<string, unknown>) || {},
+        attempt: 1,
+        enqueuedAt: new Date().toISOString(),
+      };
+
+      pendingTasks.push(task);
+      
+      // Batch enqueue when we have enough tasks
+      if (pendingTasks.length >= BATCH_SIZE) {
+        await Promise.all(pendingTasks.map((t) => deps.enqueueTask(t)));
+        enqueued += pendingTasks.length;
+        pendingTasks.length = 0;
+      }
+    }
+
+    if (page.nextOffset === null) {
+      break;
+    }
+    offset = page.nextOffset;
+  }
+
+  // Enqueue any remaining tasks
+  if (pendingTasks.length > 0) {
+    await Promise.all(pendingTasks.map((t) => deps.enqueueTask(t)));
+    enqueued += pendingTasks.length;
   }
 
   return { ok: true, enqueued };

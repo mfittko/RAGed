@@ -20,11 +20,59 @@ const DISTANCE: DistanceMetric = getDistance();
 
 export const qdrant = new QdrantClient({ url: QDRANT_URL });
 
+interface QdrantErrorWithStatus {
+  status?: number;
+  response?: {
+    status?: number;
+  };
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+
+  const maybe = error as QdrantErrorWithStatus;
+  if (typeof maybe.status === "number") {
+    return maybe.status;
+  }
+  if (typeof maybe.response?.status === "number") {
+    return maybe.response.status;
+  }
+
+  return undefined;
+}
+
 export async function ensureCollection(name = DEFAULT_COLLECTION) {
   const collections = await qdrant.getCollections();
   const exists = collections.collections?.some((c) => c.name === name);
-  if (exists) return;
-  await qdrant.createCollection(name, { vectors: { size: VECTOR_SIZE, distance: DISTANCE } });
+  if (!exists) {
+    await qdrant.createCollection(name, { vectors: { size: VECTOR_SIZE, distance: DISTANCE } });
+  }
+  
+  // Create payload indexes for filterable fields to avoid full collection scans
+  // Required indexes per AGENTS.md performance requirements
+  const payloadIndexes = [
+    "enrichmentStatus", // used in enrichment queries
+    "repoId",          // used in CLI filtering
+    "path",            // used in CLI filtering  
+    "lang",            // used in CLI filtering
+    "baseId",          // used in getPointsByBaseId (see task #7)
+  ];
+  
+  for (const fieldName of payloadIndexes) {
+    try {
+      await qdrant.createPayloadIndex(name, {
+        field_name: fieldName,
+        field_schema: "keyword",
+      });
+    } catch (error: unknown) {
+      const status = getErrorStatus(error);
+      if (status !== 409) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function collectionName(name?: string) {
@@ -35,27 +83,30 @@ export async function getPointsByBaseId(
   collection: string,
   baseId: string,
 ) {
-  // Fetch all points via paginated scroll and filter client-side for baseId prefix matching
-  // Note: Qdrant doesn't support prefix matching in filters, so we fetch
-  // all pages and filter in-memory.
+  // Required index: baseId (string) — created in ensureCollection (task #6)
+  // Use indexed server-side filter instead of client-side scan
   const matchingPoints: Array<{ id: string; payload: Record<string, unknown> | undefined }> = [];
   let nextPageOffset: string | number | Record<string, unknown> | null | undefined = undefined;
 
   do {
     const page = await qdrant.scroll(collection, {
+      filter: {
+        must: [
+          {
+            key: "baseId",
+            match: { value: baseId },
+          },
+        ],
+      },
       limit: 1000,
-      // Qdrant expects `offset` for pagination; omit it on the first call
       ...(nextPageOffset !== undefined && nextPageOffset !== null ? { offset: nextPageOffset } : {}),
     });
 
     for (const p of page.points) {
-      const id = String(p.id);
-      if (id === baseId || id.startsWith(`${baseId}:`)) {
-        matchingPoints.push({
-          id,
-          payload: p.payload as Record<string, unknown> | undefined,
-        });
-      }
+      matchingPoints.push({
+        id: String(p.id),
+        payload: p.payload as Record<string, unknown> | undefined,
+      });
     }
 
     nextPageOffset = page.next_page_offset ?? null;
@@ -69,6 +120,12 @@ export async function scrollPoints(
   filter?: Record<string, unknown>,
   limit = 100,
 ) {
+  // Required indexes (when filter is used):
+  // - enrichmentStatus (string)
+  // - repoId (string) 
+  // - path (string)
+  // - lang (string)
+  // See task #6 for index creation
   const allPoints: Array<{ id: string; payload: Record<string, unknown> | undefined }> = [];
   let nextPageOffset: string | number | Record<string, unknown> | null | undefined = undefined;
 
@@ -98,6 +155,27 @@ export async function scrollPoints(
   }
 
   return allPoints;
+}
+
+export async function scrollPointsPage(
+  collection: string,
+  filter?: Record<string, unknown>,
+  limit = 100,
+  offset?: string | number | Record<string, unknown> | null,
+) {
+  const result = await qdrant.scroll(collection, {
+    filter,
+    limit,
+    ...(offset !== undefined && offset !== null ? { offset } : {}),
+  });
+
+  return {
+    points: result.points.map((p) => ({
+      id: String(p.id),
+      payload: p.payload as Record<string, unknown> | undefined,
+    })),
+    nextOffset: result.next_page_offset ?? null,
+  };
 }
 
 export async function getPointsByIds(

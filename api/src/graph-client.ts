@@ -26,6 +26,22 @@ export function isGraphEnabled(): boolean {
   return Boolean(NEO4J_URL && NEO4J_USER && NEO4J_PASSWORD);
 }
 
+export async function ensureIndexes(): Promise<void> {
+  const d = getDriver();
+  if (!d) return;
+
+  const session = d.session();
+  try {
+    // Required index: Entity.name for all entity lookup queries (task #8)
+    // This supports: expandEntities, getEntity, getDocumentsByEntityMention
+    await session.run(
+      "CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)"
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 export interface Entity {
   name: string;
   type: string;
@@ -69,6 +85,7 @@ export async function expandEntities(
 
   const session = d.session();
   try {
+    // Required index: Entity.name (see task #8 for index creation)
     const query = `
       MATCH (e:Entity)
       WHERE e.name IN $entityNames
@@ -93,6 +110,7 @@ export async function getEntity(name: string): Promise<EntityDetails | null> {
 
   const session = d.session();
   try {
+    // Required index: Entity.name (see task #8 for index creation)
     const result = await session.run(
       `
       MATCH (e:Entity {name: $name})
@@ -136,6 +154,7 @@ export async function getDocumentsByEntityMention(
 
   const session = d.session();
   try {
+    // Required index: Entity.name (see task #8 for index creation)
     const result = await session.run(
       `
       MATCH (d:Document)-[:MENTIONS]->(e:Entity {name: $entityName})
