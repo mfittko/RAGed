@@ -167,12 +167,10 @@ export async function getEnrichmentStats(
     deps.getQueueLength("enrichment:dead-letter"),
   ]);
 
-  // Count processing items by scrolling through collection
-  // Note: This uses a high limit for initial implementation. For very large
-  // collections (>10k items), consider implementing pagination or caching.
+  // Stream through collection in pages to avoid loading all points into memory
   const col = deps.collectionName();
-  const allPoints = await deps.scrollPoints(col, undefined, 10000);
-
+  const PAGE_SIZE = 500;
+  
   const totals = {
     enriched: 0,
     failed: 0,
@@ -181,11 +179,21 @@ export async function getEnrichmentStats(
     none: 0,
   };
 
-  for (const point of allPoints) {
-    const status = (point.payload?.enrichmentStatus as string) || "none";
-    if (status in totals) {
-      totals[status as keyof typeof totals]++;
+  let offset: string | number | Record<string, unknown> | null | undefined = undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const points = await deps.scrollPoints(col, undefined, PAGE_SIZE);
+    
+    for (const point of points) {
+      const status = (point.payload?.enrichmentStatus as string) || "none";
+      if (status in totals) {
+        totals[status as keyof typeof totals]++;
+      }
     }
+    
+    // If we got fewer points than requested, we're done
+    hasMore = points.length >= PAGE_SIZE;
   }
 
   return {
@@ -216,54 +224,68 @@ export async function enqueueEnrichment(
         ],
       };
 
-  // Note: This uses a high limit for initial implementation. For very large
-  // collections (>10k items), consider implementing pagination or batching.
-  const points = await deps.scrollPoints(col, filter, 10000);
-
-  // Compute totalChunks per baseId so document-level extraction runs only once
-  const baseIdToTotalChunks = new Map<string, number>();
-  for (const point of points) {
-    const payload = point.payload;
-    if (!payload) continue;
-    const baseId = extractBaseId(point.id);
-    const current = baseIdToTotalChunks.get(baseId) ?? 0;
-    baseIdToTotalChunks.set(baseId, current + 1);
-  }
-
-  let enqueued = 0;
+  // Stream through collection in pages to avoid loading all points into memory
+  const PAGE_SIZE = 500;
   const BATCH_SIZE = 100;
-  const tasks: EnrichmentTask[] = [];
   
-  for (const point of points) {
-    const payload = point.payload;
-    if (!payload) continue;
+  let enqueued = 0;
+  const baseIdToTotalChunks = new Map<string, number>();
+  const pendingTasks: EnrichmentTask[] = [];
 
-    const baseId = extractBaseId(point.id);
-    const totalChunks = baseIdToTotalChunks.get(baseId) ?? 1;
+  let offset: string | number | Record<string, unknown> | null | undefined = undefined;
+  let hasMore = true;
 
-    const task: EnrichmentTask = {
-      taskId: randomUUID(),
-      qdrantId: point.id,
-      collection: col,
-      docType: (payload.docType as string) || "text",
-      baseId,
-      chunkIndex: (payload.chunkIndex as number) || 0,
-      totalChunks,
-      text: (payload.text as string) || "",
-      source: (payload.source as string) || "",
-      tier1Meta: (payload.tier1Meta as Record<string, unknown>) || {},
-      attempt: 1,
-      enqueuedAt: new Date().toISOString(),
-    };
+  while (hasMore) {
+    const points = await deps.scrollPoints(col, filter, PAGE_SIZE);
+    
+    // First pass: count chunks per baseId
+    for (const point of points) {
+      const baseId = extractBaseId(point.id);
+      const current = baseIdToTotalChunks.get(baseId) ?? 0;
+      baseIdToTotalChunks.set(baseId, current + 1);
+    }
+    
+    // Second pass: create tasks
+    for (const point of points) {
+      const payload = point.payload;
+      if (!payload) continue;
 
-    tasks.push(task);
+      const baseId = extractBaseId(point.id);
+      const totalChunks = baseIdToTotalChunks.get(baseId) ?? 1;
+
+      const task: EnrichmentTask = {
+        taskId: randomUUID(),
+        qdrantId: point.id,
+        collection: col,
+        docType: (payload.docType as string) || "text",
+        baseId,
+        chunkIndex: (payload.chunkIndex as number) || 0,
+        totalChunks,
+        text: (payload.text as string) || "",
+        source: (payload.source as string) || "",
+        tier1Meta: (payload.tier1Meta as Record<string, unknown>) || {},
+        attempt: 1,
+        enqueuedAt: new Date().toISOString(),
+      };
+
+      pendingTasks.push(task);
+      
+      // Batch enqueue when we have enough tasks
+      if (pendingTasks.length >= BATCH_SIZE) {
+        await Promise.all(pendingTasks.map(t => deps.enqueueTask(t)));
+        enqueued += pendingTasks.length;
+        pendingTasks.length = 0;
+      }
+    }
+    
+    // If we got fewer points than requested, we're done
+    hasMore = points.length >= PAGE_SIZE;
   }
-
-  // Batch enqueue tasks in groups to avoid overwhelming Redis
-  for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
-    const batch = tasks.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(task => deps.enqueueTask(task)));
-    enqueued += batch.length;
+  
+  // Enqueue any remaining tasks
+  if (pendingTasks.length > 0) {
+    await Promise.all(pendingTasks.map(t => deps.enqueueTask(t)));
+    enqueued += pendingTasks.length;
   }
 
   return { ok: true, enqueued };

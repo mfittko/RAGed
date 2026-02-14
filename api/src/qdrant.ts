@@ -53,29 +53,30 @@ export async function getPointsByBaseId(
   collection: string,
   baseId: string,
 ) {
-  // Required index: baseId (string) — see task #7 for migration to indexed query
-  // Current implementation: Full collection scan with client-side prefix filter
-  // Fetch all points via paginated scroll and filter client-side for baseId prefix matching
-  // Note: Qdrant doesn't support prefix matching in filters, so we fetch
-  // all pages and filter in-memory.
+  // Required index: baseId (string) — created in ensureCollection (task #6)
+  // Use indexed server-side filter instead of client-side scan
   const matchingPoints: Array<{ id: string; payload: Record<string, unknown> | undefined }> = [];
   let nextPageOffset: string | number | Record<string, unknown> | null | undefined = undefined;
 
   do {
     const page = await qdrant.scroll(collection, {
+      filter: {
+        must: [
+          {
+            key: "baseId",
+            match: { value: baseId },
+          },
+        ],
+      },
       limit: 1000,
-      // Qdrant expects `offset` for pagination; omit it on the first call
       ...(nextPageOffset !== undefined && nextPageOffset !== null ? { offset: nextPageOffset } : {}),
     });
 
     for (const p of page.points) {
-      const id = String(p.id);
-      if (id === baseId || id.startsWith(`${baseId}:`)) {
-        matchingPoints.push({
-          id,
-          payload: p.payload as Record<string, unknown> | undefined,
-        });
-      }
+      matchingPoints.push({
+        id: String(p.id),
+        payload: p.payload as Record<string, unknown> | undefined,
+      });
     }
 
     nextPageOffset = page.next_page_offset ?? null;

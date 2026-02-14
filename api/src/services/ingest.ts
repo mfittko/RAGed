@@ -44,103 +44,106 @@ export async function ingest(
   const shouldEnrich =
     request.enrich !== false && isEnrichmentEnabled();
 
-  const allChunks: string[] = [];
-  const chunkInfos: {
+  // Process items in batches to limit memory consumption
+  const EMBED_BATCH_SIZE = 500;
+  const now = new Date().toISOString();
+  
+  // Pre-process items to assign stable baseIds and detect metadata
+  interface ProcessedItem {
     baseId: string;
-    chunkIndex: number;
-    totalChunks: number;
-    source: string;
-    docType: string;
+    docType: DocType;
     tier1Meta: Record<string, unknown>;
+    chunks: string[];
+    source: string;
     metadata?: Record<string, unknown>;
-  }[] = [];
+  }
+  
+  const processedItems: ProcessedItem[] = request.items.map(item => ({
+    baseId: item.id ?? randomUUID(),
+    docType: detectDocType(item),
+    tier1Meta: extractTier1(item, detectDocType(item)),
+    chunks: chunkText(item.text),
+    source: item.source,
+    metadata: item.metadata,
+  }));
+  
+  let totalUpserted = 0;
 
-  for (const item of request.items) {
-    const baseId = item.id ?? randomUUID();
-    const docType = detectDocType(item);
-    const tier1Meta = extractTier1(item, docType);
-    const chunks = chunkText(item.text);
+  // Embed and upsert in batches
+  for (const procItem of processedItems) {
+    for (let batchStart = 0; batchStart < procItem.chunks.length; batchStart += EMBED_BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + EMBED_BATCH_SIZE, procItem.chunks.length);
+      const batchChunks = procItem.chunks.slice(batchStart, batchEnd);
+      const batchVectors = await deps.embed(batchChunks);
 
-    for (let i = 0; i < chunks.length; i++) {
-      allChunks.push(chunks[i]);
-      chunkInfos.push({
-        baseId,
-        chunkIndex: i,
-        totalChunks: chunks.length,
-        source: item.source,
-        docType,
-        tier1Meta,
-        metadata: item.metadata,
-      });
+      const batchPoints: QdrantPoint[] = [];
+      for (let i = 0; i < batchChunks.length; i++) {
+        const chunkIndex = batchStart + i;
+        batchPoints.push({
+          id: `${procItem.baseId}:${chunkIndex}`,
+          vector: batchVectors[i],
+          payload: {
+            ...(procItem.metadata ?? {}),
+            text: batchChunks[i],
+            source: procItem.source,
+            chunkIndex,
+            baseId: procItem.baseId,
+            docType: procItem.docType,
+            ingestedAt: now,
+            enrichmentStatus: shouldEnrich ? "pending" : "none",
+            tier1Meta: procItem.tier1Meta,
+          },
+        });
+      }
+
+      await deps.upsert(col, batchPoints);
+      totalUpserted += batchPoints.length;
     }
   }
-
-  const vectors = await deps.embed(allChunks);
-
-  const points: QdrantPoint[] = [];
-  // Use single timestamp for all chunks in this batch for consistency
-  const now = new Date().toISOString();
-
-  for (let i = 0; i < allChunks.length; i++) {
-    const info = chunkInfos[i];
-    points.push({
-      id: `${info.baseId}:${info.chunkIndex}`,
-      vector: vectors[i],
-      payload: {
-        ...(info.metadata ?? {}),
-        text: allChunks[i],
-        source: info.source,
-        chunkIndex: info.chunkIndex,
-        baseId: info.baseId, // Store explicit baseId for indexed queries (task #7)
-        docType: info.docType,
-        ingestedAt: now,
-        enrichmentStatus: shouldEnrich ? "pending" : "none",
-        tier1Meta: info.tier1Meta,
-      },
-    });
-  }
-
-  await deps.upsert(col, points);
 
   // Enqueue enrichment tasks
   if (shouldEnrich) {
+    const TASK_BATCH_SIZE = 100;
     const tasks: EnrichmentTask[] = [];
-    for (let i = 0; i < allChunks.length; i++) {
-      const info = chunkInfos[i];
-      tasks.push({
-        taskId: randomUUID(),
-        qdrantId: `${info.baseId}:${info.chunkIndex}`,
-        collection: col,
-        docType: info.docType,
-        baseId: info.baseId,
-        chunkIndex: info.chunkIndex,
-        totalChunks: info.totalChunks,
-        text: allChunks[i],
-        source: info.source,
-        tier1Meta: info.tier1Meta,
-        attempt: 1,
-        enqueuedAt: now,
-      });
+    const docTypeCounts: Record<string, number> = {};
+    
+    // Build tasks from processed items
+    for (const procItem of processedItems) {
+      docTypeCounts[procItem.docType] = (docTypeCounts[procItem.docType] || 0) + procItem.chunks.length;
+
+      for (let chunkIndex = 0; chunkIndex < procItem.chunks.length; chunkIndex++) {
+        tasks.push({
+          taskId: randomUUID(),
+          qdrantId: `${procItem.baseId}:${chunkIndex}`,
+          collection: col,
+          docType: procItem.docType,
+          baseId: procItem.baseId,
+          chunkIndex,
+          totalChunks: procItem.chunks.length,
+          text: procItem.chunks[chunkIndex],
+          source: procItem.source,
+          tier1Meta: procItem.tier1Meta,
+          attempt: 1,
+          enqueuedAt: now,
+        });
+      }
     }
 
-    // Batch enqueue all tasks
-    await Promise.all(tasks.map((task) => enqueueEnrichment(task)));
-
-    // Compute enrichment stats from actual chunks enqueued
-    const docTypeCounts: Record<string, number> = {};
-    for (const info of chunkInfos) {
-      docTypeCounts[info.docType] = (docTypeCounts[info.docType] || 0) + 1;
+    // Batch enqueue tasks in groups to avoid overwhelming Redis
+    for (let i = 0; i < tasks.length; i += TASK_BATCH_SIZE) {
+      const batch = tasks.slice(i, i + TASK_BATCH_SIZE);
+      await Promise.all(batch.map(task => enqueueEnrichment(task)));
     }
 
     return {
       ok: true,
-      upserted: points.length,
+      upserted: totalUpserted,
       enrichment: {
-        enqueued: allChunks.length,
+        enqueued: tasks.length,
         docTypes: docTypeCounts,
       },
     };
   }
 
-  return { ok: true, upserted: points.length };
+  return { ok: true, upserted: totalUpserted };
 }
