@@ -94,7 +94,7 @@ export async function query(
   let graphData: GraphData | undefined;
 
   // Graph expansion if requested
-  if (request.graphExpand && deps.expandEntities && deps.getPointsByIds) {
+  if (request.graphExpand && deps.expandEntities) {
     // Extract entity names from tier2/tier3 metadata in results
     const entityNames = new Set<string>();
     for (const result of results) {

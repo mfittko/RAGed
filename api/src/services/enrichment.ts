@@ -82,7 +82,9 @@ export async function getEnrichmentStatus(
   const chunks = await deps.getPointsByBaseId(col, request.baseId);
 
   if (chunks.length === 0) {
-    throw new Error(`No chunks found for baseId: ${request.baseId}`);
+    const error = new Error(`No chunks found for baseId: ${request.baseId}`) as Error & { statusCode?: number };
+    error.statusCode = 404;
+    throw error;
   }
 
   const statusCounts = {
@@ -218,19 +220,32 @@ export async function enqueueEnrichment(
   // collections (>10k items), consider implementing pagination or batching.
   const points = await deps.scrollPoints(col, filter, 10000);
 
+  // Compute totalChunks per baseId so document-level extraction runs only once
+  const baseIdToTotalChunks = new Map<string, number>();
+  for (const point of points) {
+    const payload = point.payload;
+    if (!payload) continue;
+    const baseId = extractBaseId(point.id);
+    const current = baseIdToTotalChunks.get(baseId) ?? 0;
+    baseIdToTotalChunks.set(baseId, current + 1);
+  }
+
   let enqueued = 0;
   for (const point of points) {
     const payload = point.payload;
     if (!payload) continue;
+
+    const baseId = extractBaseId(point.id);
+    const totalChunks = baseIdToTotalChunks.get(baseId) ?? 1;
 
     const task: EnrichmentTask = {
       taskId: randomUUID(),
       qdrantId: point.id,
       collection: col,
       docType: (payload.docType as string) || "text",
-      baseId: extractBaseId(point.id),
+      baseId,
       chunkIndex: (payload.chunkIndex as number) || 0,
-      totalChunks: 1,
+      totalChunks,
       text: (payload.text as string) || "",
       source: (payload.source as string) || "",
       tier1Meta: (payload.tier1Meta as Record<string, unknown>) || {},

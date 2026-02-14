@@ -35,23 +35,33 @@ export async function getPointsByBaseId(
   collection: string,
   baseId: string,
 ) {
-  // Fetch all points and filter client-side for baseId prefix matching
+  // Fetch all points via paginated scroll and filter client-side for baseId prefix matching
   // Note: Qdrant doesn't support prefix matching in filters, so we fetch
-  // a reasonable batch and filter in-memory. For very large collections,
-  // consider implementing pagination.
-  const allPoints = await qdrant.scroll(collection, {
-    limit: 1000,
-  });
+  // all pages and filter in-memory.
+  const matchingPoints: Array<{ id: string; payload: Record<string, unknown> | undefined }> = [];
+  let offset: string | number | Record<string, unknown> | null | undefined = undefined;
 
-  const matchingPoints = allPoints.points.filter((p) => {
-    const id = String(p.id);
-    return id === baseId || id.startsWith(`${baseId}:`);
-  });
+  do {
+    const page = await qdrant.scroll(collection, {
+      limit: 1000,
+      // Qdrant expects `offset` for pagination; omit it on the first call
+      ...(offset !== undefined && offset !== null ? { offset } : {}),
+    });
 
-  return matchingPoints.map((p) => ({
-    id: String(p.id),
-    payload: p.payload as Record<string, unknown> | undefined,
-  }));
+    for (const p of page.points) {
+      const id = String(p.id);
+      if (id === baseId || id.startsWith(`${baseId}:`)) {
+        matchingPoints.push({
+          id,
+          payload: p.payload as Record<string, unknown> | undefined,
+        });
+      }
+    }
+
+    offset = page.next_page_offset ?? null;
+  } while (offset !== undefined && offset !== null);
+
+  return matchingPoints;
 }
 
 export async function scrollPoints(
@@ -59,15 +69,35 @@ export async function scrollPoints(
   filter?: Record<string, unknown>,
   limit = 100,
 ) {
-  const result = await qdrant.scroll(collection, {
-    filter,
-    limit,
-  });
+  const allPoints: Array<{ id: string; payload: Record<string, unknown> | undefined }> = [];
+  let nextPageOffset: string | number | Record<string, unknown> | null | undefined = undefined;
 
-  return result.points.map((p) => ({
-    id: String(p.id),
-    payload: p.payload as Record<string, unknown> | undefined,
-  }));
+  while (true) {
+    const remaining = limit - allPoints.length;
+    if (remaining <= 0) {
+      break;
+    }
+
+    const result = await qdrant.scroll(collection, {
+      filter,
+      limit: Math.min(remaining, 1000),
+      ...(nextPageOffset !== undefined && nextPageOffset !== null ? { offset: nextPageOffset } : {}),
+    });
+
+    const pagePoints = result.points.map((p) => ({
+      id: String(p.id),
+      payload: p.payload as Record<string, unknown> | undefined,
+    }));
+
+    allPoints.push(...pagePoints);
+    nextPageOffset = result.next_page_offset ?? null;
+
+    if (nextPageOffset === undefined || nextPageOffset === null) {
+      break;
+    }
+  }
+
+  return allPoints;
 }
 
 export async function getPointsByIds(

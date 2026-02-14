@@ -60,6 +60,7 @@ export const enrichmentStatusSchema = {
 export const enrichmentEnqueueSchema = {
   body: {
     type: "object" as const,
+    additionalProperties: false as const,
     properties: {
       collection: { type: "string" as const },
       force: { type: "boolean" as const },

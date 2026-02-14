@@ -57,18 +57,21 @@ export async function expandEntities(
   const d = getDriver();
   if (!d || entityNames.length === 0) return [];
 
+  // Sanitize depth: ensure it is a positive integer within a reasonable upper bound.
+  const MAX_DEPTH = 10;
+  const normalizedDepth = Number.isInteger(depth) ? depth : 2;
+  const safeDepth = Math.min(Math.max(normalizedDepth, 1), MAX_DEPTH);
+
   const session = d.session();
   try {
-    const result = await session.run(
-      `
+    const query = `
       MATCH (e:Entity)
       WHERE e.name IN $entityNames
-      MATCH path = (e)-[:RELATES_TO*1..$depth]-(neighbor:Entity)
+      MATCH path = (e)-[:RELATES_TO*1..${safeDepth}]-(neighbor:Entity)
       RETURN DISTINCT neighbor.name AS name, neighbor.type AS type, neighbor.description AS description
       LIMIT 200
-      `,
-      { entityNames, depth },
-    );
+      `;
+    const result = await session.run(query, { entityNames });
     return result.records.map((record) => ({
       name: record.get("name") as string,
       type: record.get("type") as string,

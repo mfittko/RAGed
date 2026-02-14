@@ -106,15 +106,15 @@ export function buildApp() {
   });
 
   // Graph endpoint
-  app.get("/graph/entity/:name", { schema: graphEntitySchema }, async (req) => {
+  app.get("/graph/entity/:name", { schema: graphEntitySchema }, async (req, reply) => {
     const params = req.params as { name: string };
     if (!isGraphEnabled()) {
-      return { error: "Graph functionality is not enabled" };
+      return reply.status(503).send({ error: "Graph functionality is not enabled" });
     }
 
     const entityDetails = await getEntity(params.name);
     if (!entityDetails) {
-      return { error: "Entity not found" };
+      return reply.status(404).send({ error: "Entity not found" });
     }
 
     // Get documents that mention this entity
