@@ -22,7 +22,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: "${NEO4J_AUTH:-}"
+      NEO4J_AUTH: "${NEO4J_AUTH:-none}"
       NEO4J_PLUGINS: '["apoc"]'
     volumes: ["neo4j_data:/data"]
     profiles: ["enrichment", "full"]
@@ -34,7 +34,7 @@ services:
       QDRANT_URL: "http://qdrant:6333"
       NEO4J_URL: "bolt://neo4j:7687"
       NEO4J_USER: "neo4j"
-      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-}"
       OLLAMA_URL: "http://ollama:11434"
       EXTRACTOR_PROVIDER: "ollama"
       EXTRACTOR_MODEL_FAST: "llama3"

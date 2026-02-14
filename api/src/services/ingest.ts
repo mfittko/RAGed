@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chunkText } from "../chunking.js";
-import { detectDocType, type DocType } from "../doctype.js";
+import { detectDocType, type DocType, type IngestItem } from "../doctype.js";
 import { extractTier1 } from "../extractors/index.js";
 import { enqueueEnrichment, isEnrichmentEnabled } from "../redis.js";
 
@@ -8,14 +8,6 @@ export interface IngestRequest {
   collection?: string;
   enrich?: boolean;
   items: IngestItem[];
-}
-
-export interface IngestItem {
-  id?: string;
-  text: string;
-  source: string;
-  docType?: DocType;
-  metadata?: Record<string, unknown>;
 }
 
 export interface IngestResult {
@@ -26,6 +18,8 @@ export interface IngestResult {
     docTypes: Record<string, number>;
   };
 }
+
+export { type IngestItem };
 
 export interface QdrantPoint {
   id: string;
@@ -49,11 +43,6 @@ export async function ingest(
 
   const shouldEnrich =
     request.enrich !== false && isEnrichmentEnabled();
-  const enrichmentTasks: Array<{
-    docType: string;
-    baseId: string;
-    tier1Meta: Record<string, unknown>;
-  }> = [];
 
   const allChunks: string[] = [];
   const chunkInfos: {
@@ -83,11 +72,6 @@ export async function ingest(
         tier1Meta,
         metadata: item.metadata,
       });
-    }
-
-    // Track for enrichment if enabled
-    if (shouldEnrich) {
-      enrichmentTasks.push({ docType, baseId, tier1Meta });
     }
   }
 
@@ -119,9 +103,10 @@ export async function ingest(
 
   // Enqueue enrichment tasks
   if (shouldEnrich) {
+    const tasks = [];
     for (let i = 0; i < allChunks.length; i++) {
       const info = chunkInfos[i];
-      await enqueueEnrichment({
+      tasks.push({
         taskId: randomUUID(),
         qdrantId: `${info.baseId}:${info.chunkIndex}`,
         collection: col,
@@ -137,10 +122,13 @@ export async function ingest(
       });
     }
 
-    // Compute enrichment stats
+    // Batch enqueue all tasks
+    await Promise.all(tasks.map((task) => enqueueEnrichment(task)));
+
+    // Compute enrichment stats from actual chunks enqueued
     const docTypeCounts: Record<string, number> = {};
-    for (const task of enrichmentTasks) {
-      docTypeCounts[task.docType] = (docTypeCounts[task.docType] || 0) + 1;
+    for (const info of chunkInfos) {
+      docTypeCounts[info.docType] = (docTypeCounts[info.docType] || 0) + 1;
     }
 
     return {

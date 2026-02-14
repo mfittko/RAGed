@@ -15,7 +15,10 @@ export const ingestSchema = {
             id: { type: "string" as const },
             text: { type: "string" as const, minLength: 1, pattern: "\\S" },
             source: { type: "string" as const, minLength: 1, pattern: "\\S" },
-            docType: { type: "string" as const },
+            docType: {
+              type: "string" as const,
+              enum: ["code", "slack", "email", "meeting", "pdf", "image", "article", "text"],
+            },
             metadata: { type: "object" as const },
           },
         },

@@ -21,6 +21,7 @@ const ENRICHMENT_ENABLED =
   Boolean(process.env.REDIS_URL);
 
 let redisClient: ReturnType<typeof createClient> | null = null;
+let connectPromise: Promise<void> | null = null;
 
 export function isEnrichmentEnabled(): boolean {
   return ENRICHMENT_ENABLED;
@@ -36,9 +37,15 @@ async function getRedisClient() {
       url: process.env.REDIS_URL || "redis://localhost:6379",
     });
     redisClient.on("error", (err) => console.error("Redis error:", err));
-    await redisClient.connect();
+    
+    // Store connect promise to prevent race conditions
+    if (!connectPromise) {
+      connectPromise = redisClient.connect();
+    }
   }
 
+  // Always await the connect promise to ensure client is ready
+  await connectPromise;
   return redisClient;
 }
 

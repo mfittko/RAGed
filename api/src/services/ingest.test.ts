@@ -1,6 +1,18 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ingest } from "./ingest.js";
 import type { IngestDeps, IngestRequest } from "./ingest.js";
+
+// Mock the redis module
+vi.mock("../redis.js", () => {
+  const mockEnqueue = vi.fn(async () => {});
+  const mockIsEnabled = vi.fn(() => false);
+  return {
+    enqueueEnrichment: mockEnqueue,
+    isEnrichmentEnabled: mockIsEnabled,
+    __mockEnqueue: mockEnqueue,
+    __mockIsEnabled: mockIsEnabled,
+  };
+});
 
 function makeDeps(overrides?: Partial<IngestDeps>): IngestDeps {
   return {
@@ -179,5 +191,63 @@ describe("ingest service", () => {
     expect(points[0].payload.enrichmentStatus).toBeDefined();
     expect(points[0].payload.ingestedAt).toBeDefined();
     expect(points[0].payload.tier1Meta).toBeDefined();
+  });
+
+  it("enqueues enrichment tasks when enrichment is enabled", async () => {
+    // Setup mocks
+    const redis = await import("../redis.js");
+    const mockEnqueue = (redis as any).__mockEnqueue;
+    const mockIsEnabled = (redis as any).__mockIsEnabled;
+    
+    // Reset and configure mocks
+    mockEnqueue.mockClear();
+    mockIsEnabled.mockReturnValue(true);
+
+    const upsertMock = vi.fn(async () => {});
+    const deps = makeDeps({ upsert: upsertMock });
+    const request: IngestRequest = {
+      items: [
+        { id: "doc-1", text: "hello world", source: "test.ts", docType: "code" },
+        { id: "doc-2", text: "short", source: "note.txt", docType: "text" },
+      ],
+    };
+
+    const result = await ingest(request, deps);
+
+    // Verify enrichment response structure
+    expect(result.enrichment).toBeDefined();
+    expect(result.enrichment?.enqueued).toBe(2);
+    expect(result.enrichment?.docTypes).toEqual({ code: 1, text: 1 });
+
+    // Verify tasks were enqueued
+    expect(mockEnqueue).toHaveBeenCalledTimes(2);
+
+    // Verify enrichmentStatus in payload
+    const points = (upsertMock.mock.calls[0] as any)[1];
+    expect(points[0].payload.enrichmentStatus).toBe("pending");
+    expect(points[1].payload.enrichmentStatus).toBe("pending");
+
+    // Clean up
+    mockIsEnabled.mockReturnValue(false);
+  });
+
+  it("skips enrichment when disabled", async () => {
+    const redis = await import("../redis.js");
+    const mockEnqueue = (redis as any).__mockEnqueue;
+    const mockIsEnabled = (redis as any).__mockIsEnabled;
+    
+    mockEnqueue.mockClear();
+    mockIsEnabled.mockReturnValue(false);
+
+    const deps = makeDeps();
+    const request: IngestRequest = {
+      items: [{ text: "hello", source: "test.txt" }],
+    };
+
+    const result = await ingest(request, deps);
+
+    // No enrichment response when disabled
+    expect(result.enrichment).toBeUndefined();
+    expect(mockEnqueue).not.toHaveBeenCalled();
   });
 });
