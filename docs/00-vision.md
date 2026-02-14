@@ -1,10 +1,20 @@
 # Vision
 
-rag-stack is a semantic knowledge base for AI agents — a retrieval-augmented generation (RAG) system that stores and retrieves grounded context from any text content: code, documentation, articles, emails, transcripts, or notes.
+rag-stack is a hybrid vector + graph knowledge base for AI agents. It combines semantic similarity search (vector DB) with relationship-aware retrieval (graph DB) to give agents grounded context from any text content: code, documentation, articles, emails, transcripts, or notes.
 
 ## Why
 
-AI agents work best with relevant context, but stuffing entire knowledge bases into a model's context window is wasteful and expensive. rag-stack keeps the heavy retrieval work outside the model loop: ingest once, query many times, return only what's relevant. The API is content-agnostic — it chunks, embeds, and searches any text you give it.
+AI agents work best with relevant context, but stuffing entire knowledge bases into a model's context window is wasteful and expensive. rag-stack keeps the heavy retrieval work outside the model loop: ingest once, query many times, return only what's relevant.
+
+Vector search alone finds *semantically similar* content. But real knowledge has structure — docs reference code, emails discuss designs, repos depend on libraries. A graph layer captures these relationships, enabling retrieval that follows connections, not just similarity. The combination is more powerful than either alone:
+
+| Query type | Vector DB | + Graph DB |
+|-----------|----------|------------|
+| "Find code about auth" | Semantic match | Same |
+| "What docs reference this function?" | Can't | Follow edges |
+| "Show the email thread behind this design" | Can't | Traverse relationships |
+| "What depends on this library?" | Can't | Dependency graph |
+| "Find auth code AND everything connected to it" | Partial | Hybrid: similarity + graph neighbors |
 
 ## Architecture Overview
 
@@ -15,12 +25,16 @@ graph TD
     A3[AI Agent N] -->|HTTP| API
     CLI -->|HTTP| API[RAG API<br/>Fastify]
     API -->|embed| OL[Ollama<br/>nomic-embed-text]
-    API -->|search/upsert| QD[Qdrant<br/>Vector DB]
-    CLI -->|index| API
+    API -->|similarity search| QD[Qdrant<br/>Vector DB]
+    API -->|traverse relationships| GD[Graph DB]
+    API -->|hybrid retrieval| QD
+    API -->|hybrid retrieval| GD
+    CLI -->|ingest| API
 
     style API fill:#e1f5fe
     style QD fill:#f3e5f5
     style OL fill:#e8f5e9
+    style GD fill:#fff3e0
 ```
 
 ## Roadmap
@@ -37,10 +51,11 @@ What exists today:
 - In-cluster indexing Job
 - Agent integrations: Claude Code skill, OpenClaw AgentSkill
 
-### v1.0 — Production Ready
+### v1.0 — Production Ready + Relationship Tracking
 
-Hardening and extensibility:
+Hardening the vector layer and adding explicit relationship tracking:
 
+**Production hardening:**
 - **Testing:** Unit tests for core logic, integration tests for API routes
 - **Input validation:** JSON Schema on all API routes
 - **Multiple embedding providers:** Adapter pattern — swap Ollama for OpenAI, Cohere, or local alternatives
@@ -49,10 +64,24 @@ Hardening and extensibility:
 - **Structured logging and health checks** (beyond `/healthz`)
 - **API versioning** (`/v1/ingest`, `/v1/query`)
 
-### v2.0 — Multi-Agent Memory Hub
+**Graph layer — relationship tracking:**
+- **Explicit edges:** API to declare relationships between content (e.g., "this doc references that code", "this email discusses that design")
+- **`POST /link`** endpoint to create typed, directed edges between ingested items
+- **Relationship-aware queries:** "find X and everything connected to it" — vector search + graph traversal combined
+- **Link types:** `references`, `depends-on`, `discusses`, `supersedes`, `authored-by` (extensible)
+- **Graph storage:** Lightweight graph DB alongside Qdrant (e.g., Neo4j, or start with adjacency lists in Qdrant payloads)
 
-The full vision:
+### v2.0 — Knowledge Graph + Multi-Agent Hub
 
+The full vision — automatic entity extraction and hybrid retrieval:
+
+**Knowledge graph:**
+- **Entity extraction:** Automatically identify entities (functions, classes, people, projects, concepts) from ingested text using LLM or NER
+- **Relation extraction:** Discover implicit relationships between entities across content
+- **GraphRAG:** Boost vector search results by graph proximity — hits that are graph-neighbors of already-relevant results rank higher
+- **Graph queries:** Traverse the knowledge graph directly (e.g., "what depends on library X across all collections?")
+
+**Multi-agent hub:**
 - **Multi-tenancy:** Isolated collections per team/project with scoped tokens
 - **Agent authentication:** Per-agent API keys with fine-grained permissions
 - **Cross-collection search:** Federated queries across multiple collections
