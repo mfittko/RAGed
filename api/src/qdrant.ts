@@ -30,3 +30,66 @@ export async function ensureCollection(name = DEFAULT_COLLECTION) {
 export function collectionName(name?: string) {
   return name || DEFAULT_COLLECTION;
 }
+
+export async function getPointsByBaseId(
+  collection: string,
+  baseId: string,
+) {
+  const result = await qdrant.scroll(collection, {
+    filter: {
+      should: [
+        {
+          key: "id",
+          match: { value: baseId },
+        },
+      ],
+    },
+    limit: 100,
+  });
+
+  // Also search by ID prefix pattern (baseId:chunkIndex)
+  const allPoints = await qdrant.scroll(collection, {
+    limit: 1000,
+  });
+
+  const matchingPoints = allPoints.points.filter((p) => {
+    const id = String(p.id);
+    return id === baseId || id.startsWith(`${baseId}:`);
+  });
+
+  return matchingPoints.map((p) => ({
+    id: String(p.id),
+    payload: p.payload as Record<string, unknown> | undefined,
+  }));
+}
+
+export async function scrollPoints(
+  collection: string,
+  filter?: Record<string, unknown>,
+  limit = 100,
+) {
+  const result = await qdrant.scroll(collection, {
+    filter,
+    limit,
+  });
+
+  return result.points.map((p) => ({
+    id: String(p.id),
+    payload: p.payload as Record<string, unknown> | undefined,
+  }));
+}
+
+export async function getPointsByIds(
+  collection: string,
+  ids: string[],
+) {
+  if (ids.length === 0) return [];
+
+  const result = await qdrant.retrieve(collection, { ids });
+
+  return result.map((p) => ({
+    id: String(p.id),
+    score: 1.0, // Retrieved points don't have a score
+    payload: p.payload as Record<string, unknown> | undefined,
+  }));
+}

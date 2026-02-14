@@ -36,6 +36,43 @@ export const querySchema = {
       query: { type: "string" as const, minLength: 1, pattern: "\\S" },
       topK: { type: "integer" as const, minimum: 1, maximum: 100 },
       filter: { type: "object" as const },
+      graphExpand: { type: "boolean" as const },
+    },
+  },
+};
+
+export const enrichmentStatusSchema = {
+  params: {
+    type: "object" as const,
+    required: ["baseId"],
+    properties: {
+      baseId: { type: "string" as const, minLength: 1 },
+    },
+  },
+  querystring: {
+    type: "object" as const,
+    properties: {
+      collection: { type: "string" as const },
+    },
+  },
+};
+
+export const enrichmentEnqueueSchema = {
+  body: {
+    type: "object" as const,
+    properties: {
+      collection: { type: "string" as const },
+      force: { type: "boolean" as const },
+    },
+  },
+};
+
+export const graphEntitySchema = {
+  params: {
+    type: "object" as const,
+    required: ["name"],
+    properties: {
+      name: { type: "string" as const, minLength: 1 },
     },
   },
 };
