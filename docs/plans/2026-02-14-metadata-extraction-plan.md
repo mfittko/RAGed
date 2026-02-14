@@ -41,7 +41,7 @@ Add after the `ollama` service block (after line 10):
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: "neo4j/ragstack"
+      NEO4J_AUTH: "${NEO4J_AUTH:-}"
       NEO4J_PLUGINS: '["apoc"]'
     volumes: ["neo4j_data:/data"]
     profiles: ["enrichment", "full"]
@@ -57,7 +57,7 @@ Add after the `ollama` service block (after line 10):
       QDRANT_URL: "http://qdrant:6333"
       NEO4J_URL: "bolt://neo4j:7687"
       NEO4J_USER: "neo4j"
-      NEO4J_PASSWORD: "ragstack"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD}"
       OLLAMA_URL: "http://ollama:11434"
       EXTRACTOR_PROVIDER: "ollama"
       EXTRACTOR_MODEL_FAST: "llama3"
@@ -73,11 +73,11 @@ Add after the `ollama` service block (after line 10):
 In the `api` service environment block (after line 23), add:
 
 ```yaml
-      REDIS_URL: "redis://redis:6379"
-      ENRICHMENT_ENABLED: "true"
+      ENRICHMENT_ENABLED: "false"
 ```
 
-Update api `depends_on` to include `redis` (conditionally — only when using enrichment profile).
+For enrichment runs, set `ENRICHMENT_ENABLED=true` and provide `REDIS_URL` via env/override.
+Do **not** add `redis` to the base `api.depends_on`; keep API startup independent of Redis.
 
 **Step 5: Add new volumes**
 
@@ -151,7 +151,7 @@ qdrant-client>=1.10,<2.0
 neo4j>=5.0,<6.0
 spacy>=3.7,<4.0
 pytextrank>=3.0,<4.0
-fasttext-wheel>=0.9,<1.0
+langdetect>=1.0,<2.0
 anthropic>=0.40,<1.0
 openai>=1.50,<2.0
 httpx>=0.27,<1.0
@@ -169,7 +169,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 NEO4J_URL = os.environ.get("NEO4J_URL", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "ragstack")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 EXTRACTOR_PROVIDER = os.environ.get("EXTRACTOR_PROVIDER", "ollama")
@@ -184,6 +184,9 @@ WORKER_CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "4"))
 MAX_RETRIES = 3
 QUEUE_NAME = "enrichment:pending"
 DEAD_LETTER_QUEUE = "enrichment:dead-letter"
+
+if NEO4J_URL and not NEO4J_PASSWORD:
+    raise RuntimeError("NEO4J_PASSWORD environment variable must be set for Neo4j access")
 ```
 
 **Step 4: Create main.py skeleton**
@@ -622,11 +625,17 @@ def extract_keywords(text: str, top_n: int = 10) -> list[str]:
     return [phrase.text for phrase in doc._.phrases[:top_n]]
 
 def detect_language(text: str) -> str:
-    import fasttext
-    # Use fasttext lid model
-    model = fasttext.load_model("lid.176.bin")  # downloaded in Dockerfile
-    prediction = model.predict(text.replace("\n", " ")[:512])
-    return prediction[0][0].replace("__label__", "")
+    from langdetect import detect, DetectorFactory
+    DetectorFactory.seed = 0
+
+    normalized = text.replace("\n", " ").strip()
+    if not normalized:
+        return "unknown"
+
+    try:
+        return detect(normalized)
+    except Exception:
+        return "unknown"
 ```
 
 **Step 3: Run tests**
@@ -1061,10 +1070,11 @@ Requires a Neo4j client for the API. Create `api/src/graph-client.ts`:
 import neo4j from "neo4j-driver";
 
 const NEO4J_URL = process.env.NEO4J_URL || "";
-const driver = NEO4J_URL ? neo4j.driver(NEO4J_URL, neo4j.auth.basic(
-  process.env.NEO4J_USER || "neo4j",
-  process.env.NEO4J_PASSWORD || "ragstack"
-)) : null;
+const NEO4J_USER = process.env.NEO4J_USER || "";
+const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || "";
+const driver = NEO4J_URL && NEO4J_USER && NEO4J_PASSWORD
+  ? neo4j.driver(NEO4J_URL, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD))
+  : null;
 
 export async function expandEntities(entityNames: string[], depth = 2) { ... }
 export async function getEntity(name: string) { ... }
@@ -1101,7 +1111,7 @@ git commit -m "feat(api): add enrichment status, stats, enqueue, graph expand, a
 cd cli && npm install commander pdf-parse sharp
 ```
 
-Note: the CLI currently uses `minimist` for arg parsing. Since we're adding multiple new commands, consider migrating to `commander` (already planned per commit `210591b`). If already migrated, add subcommands. If not, add the new commands with the existing pattern.
+Note: the CLI currently uses `minimist` for arg parsing. Since we're adding multiple new commands, consider migrating to `commander`. If already migrated, add subcommands. If not, add the new commands with the existing pattern.
 
 **Step 2: Implement `cmdIngest` function**
 

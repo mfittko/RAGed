@@ -156,7 +156,7 @@ Every item gets a relationship extraction pass on top of type-specific extractio
     { "name": "AuthService", "type": "class", "description": "..." }
   ],
   "relationships": [
-    { "from": "AuthService", "to": "JWT", "type": "uses", "description": "..." }
+    { "source": "AuthService", "target": "JWT", "type": "uses", "description": "..." }
   ]
 }
 ```
@@ -388,7 +388,7 @@ When `graphExpand: true`, response includes a `graph` field:
       { "name": "AuthService", "type": "class", "mentionCount": 5 }
     ],
     "relationships": [
-      { "from": "AuthService", "to": "JWT", "type": "uses" }
+      { "source": "AuthService", "target": "JWT", "type": "uses" }
     ]
   }
 }
@@ -527,9 +527,9 @@ services:
       EMBED_MODEL: "nomic-embed-text"
       PORT: "8080"
       RAG_API_TOKEN: ""
-      REDIS_URL: "redis://redis:6379"         # NEW
+      ENRICHMENT_ENABLED: "false"              # NEW (opt-in)
     ports: ["8080:8080"]
-    depends_on: [qdrant, ollama, redis]        # UPDATED
+    depends_on: [qdrant, ollama]
 
   # --- new services ---
   redis:
@@ -544,7 +544,7 @@ services:
       - "7474:7474"   # browser UI
       - "7687:7687"   # bolt protocol
     environment:
-      NEO4J_AUTH: "neo4j/ragstack"
+      NEO4J_AUTH: "${NEO4J_AUTH:-}"
       NEO4J_PLUGINS: '["apoc"]'               # utility procedures
     volumes: ["neo4j_data:/data"]
 
@@ -555,7 +555,7 @@ services:
       QDRANT_URL: "http://qdrant:6333"
       NEO4J_URL: "bolt://neo4j:7687"
       NEO4J_USER: "neo4j"
-      NEO4J_PASSWORD: "ragstack"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-}"
       OLLAMA_URL: "http://ollama:11434"
       EXTRACTOR_PROVIDER: "ollama"
       EXTRACTOR_MODEL_FAST: "llama3"
