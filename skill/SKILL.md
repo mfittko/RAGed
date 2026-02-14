@@ -12,6 +12,7 @@ metadata:
     requires:
       bins:
         - curl
+        - jq
       env:
         - RAG_STACK_URL
     primaryEnv: RAG_STACK_URL
