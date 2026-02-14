@@ -8,6 +8,15 @@ import sharp from "sharp";
 
 // Constants
 const LARGE_IMAGE_THRESHOLD_BYTES = 1000000; // 1MB
+const DEFAULT_MAX_FILES = 4000;
+
+// Supported file extensions for ingest command
+const SUPPORTED_INGEST_EXTS = new Set([
+  ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv",
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".java",
+  ".cpp", ".c", ".html", ".htm", ".css", ".toml",
+  ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"
+]);
 
 type IngestItem = { 
   id?: string; 
@@ -300,6 +309,7 @@ async function cmdIngest(options: any) {
   const dir = options.dir;
   const enrich = options.enrich !== false;
   const docTypeOverride = options.docType;
+  const maxFiles = Number(options.maxFiles || DEFAULT_MAX_FILES);
 
   if (!file && !dir) {
     console.error("Error: --file or --dir is required");
@@ -312,7 +322,11 @@ async function cmdIngest(options: any) {
     filesToProcess.push(file);
   } else if (dir) {
     const allFiles = await listFiles(dir);
-    filesToProcess.push(...allFiles);
+    // Apply maxFiles limit to prevent memory issues on large directories
+    filesToProcess.push(...allFiles.slice(0, maxFiles));
+    if (allFiles.length > maxFiles) {
+      console.warn(`[rag-index] Warning: Directory contains ${allFiles.length} files, limiting to ${maxFiles} (use --maxFiles to adjust)`);
+    }
   }
 
   const items: IngestItem[] = [];
@@ -324,14 +338,8 @@ async function cmdIngest(options: any) {
       // Skip unsupported file types when no override is provided
       if (!docTypeOverride && docType === "text") {
         const ext = path.extname(filePath).toLowerCase();
-        const supportedExts = new Set([
-          ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv",
-          ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".java",
-          ".cpp", ".c", ".html", ".htm", ".css", ".toml",
-          ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"
-        ]);
         
-        if (ext && !supportedExts.has(ext)) {
+        if (ext && !SUPPORTED_INGEST_EXTS.has(ext)) {
           console.warn(`[rag-index] Skipping unsupported file type (${ext}): ${filePath}`);
           continue;
         }
@@ -379,10 +387,9 @@ async function cmdEnrich(options: any) {
   const collection = options.collection || "docs";
   const force = Boolean(options.force);
   const showFailed = Boolean(options.showFailed);
-  const retryFailed = Boolean(options.retryFailed);
 
-  if (showFailed || !retryFailed) {
-    // Get enrichment stats (shown by default unless retrying failed)
+  if (showFailed || !force) {
+    // Get enrichment stats (shown by default unless forcing re-enqueue)
     const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/stats`, {
       method: "GET",
       headers: authHeaders(token),
@@ -413,36 +420,22 @@ async function cmdEnrich(options: any) {
     return;
   }
 
-  if (retryFailed) {
-    // Retry failed enrichment tasks by re-enqueuing them
-    console.log("[rag-index] Retrying failed enrichment tasks...");
-    const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/enqueue`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(token) },
-      body: JSON.stringify({ collection, force: true }),
-    });
-    
-    if (!res.ok) {
-      console.error(`Failed to retry failed enrichments: ${res.status} ${await res.text()}`);
-      process.exit(1);
-    }
-    
-    const result = await res.json();
-    console.log(`[rag-index] Re-enqueued ${result.enqueued} tasks (including failed ones).`);
+  // Enqueue enrichment tasks
+  const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/enqueue`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify({ collection, force }),
+  });
+  
+  if (!res.ok) {
+    console.error(`Failed to enqueue: ${res.status} ${await res.text()}`);
+    process.exit(1);
+  }
+  
+  const result = await res.json();
+  if (force) {
+    console.log(`[rag-index] Re-enqueued ${result.enqueued} tasks (including already-enriched items).`);
   } else {
-    // Enqueue enrichment tasks
-    const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/enqueue`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(token) },
-      body: JSON.stringify({ collection, force }),
-    });
-    
-    if (!res.ok) {
-      console.error(`Failed to enqueue: ${res.status} ${await res.text()}`);
-      process.exit(1);
-    }
-    
-    const result = await res.json();
     console.log(`[rag-index] Enqueued ${result.enqueued} tasks for enrichment.`);
   }
 }
@@ -550,6 +543,7 @@ async function main() {
     .option("--api <url>", "RAG API URL", "http://localhost:8080")
     .option("--collection <name>", "Qdrant collection name", "docs")
     .option("--token <token>", "Bearer token for auth")
+    .option("--maxFiles <n>", "Maximum files to process from directory", String(DEFAULT_MAX_FILES))
     .option("--no-enrich", "Disable enrichment")
     .option("--doc-type <type>", "Override document type detection")
     .action(cmdIngest);
@@ -560,9 +554,8 @@ async function main() {
     .option("--api <url>", "RAG API URL", "http://localhost:8080")
     .option("--collection <name>", "Qdrant collection name", "docs")
     .option("--token <token>", "Bearer token for auth")
-    .option("--force", "Re-enqueue already-enriched items", false)
-    .option("--show-failed", "Show failed enrichment stats only", false)
-    .option("--retry-failed", "Retry failed enrichments", false)
+    .option("--force", "Re-enqueue all items (including already-enriched)", false)
+    .option("--show-failed", "Show enrichment stats only", false)
     .action(cmdEnrich);
 
   program
