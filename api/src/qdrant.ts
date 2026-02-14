@@ -3,7 +3,7 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 const QDRANT_URL = process.env.QDRANT_URL || "http://qdrant:6333";
 const DEFAULT_COLLECTION = process.env.QDRANT_COLLECTION || "docs";
 const VECTOR_SIZE = Number(process.env.VECTOR_SIZE || "768");
-const DISTANCE = (process.env.DISTANCE || "Cosine") as any;
+const DISTANCE = (process.env.DISTANCE || "Cosine") as "Cosine" | "Euclid" | "Dot";
 
 export const qdrant = new QdrantClient({ url: QDRANT_URL });
 

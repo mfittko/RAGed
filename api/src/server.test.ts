@@ -1,0 +1,291 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import Fastify from "fastify";
+import { registerAuth } from "./auth.js";
+import { registerErrorHandler } from "./errors.js";
+import { ingest } from "./services/ingest.js";
+import { query } from "./services/query.js";
+import { ingestSchema, querySchema } from "./schemas.js";
+import type { IngestRequest } from "./services/ingest.js";
+import type { QueryRequest } from "./services/query.js";
+import type { IngestDeps } from "./services/ingest.js";
+import type { QueryDeps } from "./services/query.js";
+
+function buildTestApp(options?: {
+  ingestDeps?: Partial<IngestDeps>;
+  queryDeps?: Partial<QueryDeps>;
+}) {
+  const app = Fastify({ logger: false });
+  registerErrorHandler(app);
+  registerAuth(app);
+
+  const defaultIngestDeps: IngestDeps = {
+    embed: vi.fn(async (texts: string[]) => texts.map(() => [0.1, 0.2, 0.3])),
+    ensureCollection: vi.fn(async () => {}),
+    upsert: vi.fn(async () => {}),
+    collectionName: vi.fn((name?: string) => name || "docs"),
+  };
+
+  const defaultQueryDeps: QueryDeps = {
+    embed: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+    ensureCollection: vi.fn(async () => {}),
+    search: vi.fn(async () => [
+      {
+        id: "doc-1:0",
+        score: 0.9,
+        payload: { text: "result text", source: "test.txt", chunkIndex: 0 },
+      },
+    ]),
+    collectionName: vi.fn((name?: string) => name || "docs"),
+  };
+
+  const ingestDeps = { ...defaultIngestDeps, ...options?.ingestDeps };
+  const queryDeps = { ...defaultQueryDeps, ...options?.queryDeps };
+
+  app.get("/healthz", async () => ({ ok: true }));
+
+  app.post("/ingest", { schema: ingestSchema }, async (req) => {
+    const body = req.body as IngestRequest;
+    return ingest(body, ingestDeps);
+  });
+
+  app.post("/query", { schema: querySchema }, async (req) => {
+    const body = req.body as QueryRequest;
+    return query(body, queryDeps);
+  });
+
+  return { app, ingestDeps, queryDeps };
+}
+
+describe("API integration tests", () => {
+  describe("GET /healthz", () => {
+    it("returns 200 with { ok: true }", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz",
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      await app.close();
+    });
+  });
+
+  describe("POST /ingest", () => {
+    it("returns 200 with upsert count for valid request", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: {
+          collection: "test-col",
+          items: [
+            { text: "hello world", source: "test.txt" },
+            { text: "foo bar", source: "other.txt" },
+          ],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      expect(body.upserted).toBe(2);
+      await app.close();
+    });
+
+    it("returns 400 for missing items", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: { collection: "test" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toHaveProperty("error");
+      await app.close();
+    });
+
+    it("returns 400 for empty items array", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: { items: [] },
+      });
+
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("returns 500 when embed service fails", async () => {
+      const { app } = buildTestApp({
+        ingestDeps: {
+          embed: vi.fn(async () => {
+            throw new Error("Ollama embeddings failed: 503 Service Unavailable");
+          }),
+        },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: {
+          items: [{ text: "hello", source: "test.txt" }],
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe("Internal server error");
+      await app.close();
+    });
+  });
+
+  describe("POST /query", () => {
+    it("returns 200 with results for valid query", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        payload: {
+          query: "authentication flow",
+          topK: 5,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      expect(body.results).toHaveLength(1);
+      expect(body.results[0]).toEqual({
+        id: "doc-1:0",
+        score: 0.9,
+        source: "test.txt",
+        text: "result text",
+        payload: { text: "result text", source: "test.txt", chunkIndex: 0 },
+      });
+      await app.close();
+    });
+
+    it("returns 400 for missing query", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        payload: { topK: 5 },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toHaveProperty("error");
+      await app.close();
+    });
+
+    it("returns 400 for empty query string", async () => {
+      const { app } = buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        payload: { query: "" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("returns empty results when search returns nothing", async () => {
+      const { app } = buildTestApp({
+        queryDeps: {
+          search: vi.fn(async () => []),
+        },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        payload: { query: "nothing matches" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, results: [] });
+      await app.close();
+    });
+
+    it("passes filter through to search", async () => {
+      const searchMock = vi.fn(async () => []);
+      const { app } = buildTestApp({
+        queryDeps: { search: searchMock },
+      });
+
+      const filter = { must: [{ key: "lang", match: { value: "ts" } }] };
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        payload: { query: "hello", filter },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(searchMock).toHaveBeenCalledWith("docs", [0.1, 0.2, 0.3], 8, filter);
+      await app.close();
+    });
+  });
+
+  describe("auth integration", () => {
+    const ORIGINAL_TOKEN = process.env.RAG_API_TOKEN;
+
+    afterEach(() => {
+      if (ORIGINAL_TOKEN === undefined) {
+        delete process.env.RAG_API_TOKEN;
+      } else {
+        process.env.RAG_API_TOKEN = ORIGINAL_TOKEN;
+      }
+    });
+
+    it("blocks /ingest without token when auth is enabled", async () => {
+      process.env.RAG_API_TOKEN = "test-secret";
+      const { app } = buildTestApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: {
+          items: [{ text: "hello", source: "test.txt" }],
+        },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: "Unauthorized" });
+      await app.close();
+    });
+
+    it("allows /ingest with correct token", async () => {
+      process.env.RAG_API_TOKEN = "test-secret";
+      const { app } = buildTestApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        headers: { authorization: "Bearer test-secret" },
+        payload: {
+          items: [{ text: "hello", source: "test.txt" }],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("always allows /healthz without token", async () => {
+      process.env.RAG_API_TOKEN = "test-secret";
+      const { app } = buildTestApp();
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz",
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      await app.close();
+    });
+  });
+});
