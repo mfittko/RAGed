@@ -2,21 +2,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { enqueueEnrichment, getQueueLength, isEnrichmentEnabled } from "./redis.js";
 import type { EnrichmentTask } from "./redis.js";
 
+// Create mock client at module scope so we can access it in tests
+const mockLPush = vi.fn(async () => 1);
+const mockLLen = vi.fn(async () => 5);
+const mockConnect = vi.fn(async () => {});
+const mockQuit = vi.fn(async () => {});
+const mockOn = vi.fn();
+
+const mockClient = {
+  lPush: mockLPush,
+  lLen: mockLLen,
+  connect: mockConnect,
+  quit: mockQuit,
+  on: mockOn,
+};
+
 // Mock the redis module
-vi.mock("redis", () => {
-  const mockClient = {
-    lPush: vi.fn(async () => 1),
-    lLen: vi.fn(async () => 5),
-    connect: vi.fn(async () => {}),
-    quit: vi.fn(async () => {}),
-    on: vi.fn(),
-  };
-  
-  return {
-    createClient: vi.fn(() => mockClient),
-    __mockClient: mockClient,
-  };
-});
+vi.mock("redis", () => ({
+  createClient: vi.fn(() => mockClient),
+}));
 
 describe("redis module", () => {
   const originalEnv = process.env;
@@ -62,7 +66,6 @@ describe("redis module", () => {
       delete process.env.REDIS_URL;
       
       const { enqueueEnrichment } = await import("./redis.js");
-      const { __mockClient } = await import("redis");
       
       const task: EnrichmentTask = {
         taskId: "task-1",
@@ -80,7 +83,7 @@ describe("redis module", () => {
       };
       
       await enqueueEnrichment(task);
-      expect(__mockClient.lPush).not.toHaveBeenCalled();
+      expect(mockLPush).not.toHaveBeenCalled();
     });
 
     it("should enqueue task when enrichment is enabled", async () => {
@@ -90,7 +93,6 @@ describe("redis module", () => {
       // Need to re-import after env change
       vi.resetModules();
       const { enqueueEnrichment } = await import("./redis.js");
-      const { __mockClient } = await import("redis");
       
       const task: EnrichmentTask = {
         taskId: "task-1",
@@ -109,7 +111,7 @@ describe("redis module", () => {
       
       await enqueueEnrichment(task);
       
-      expect(__mockClient.lPush).toHaveBeenCalledWith(
+      expect(mockLPush).toHaveBeenCalledWith(
         "enrichment:pending",
         JSON.stringify(task)
       );
@@ -132,13 +134,12 @@ describe("redis module", () => {
       
       vi.resetModules();
       const { getQueueLength } = await import("./redis.js");
-      const { __mockClient } = await import("redis");
       
-      __mockClient.lLen.mockResolvedValueOnce(42);
+      mockLLen.mockResolvedValueOnce(42);
       
       const length = await getQueueLength("enrichment:pending");
       expect(length).toBe(42);
-      expect(__mockClient.lLen).toHaveBeenCalledWith("enrichment:pending");
+      expect(mockLLen).toHaveBeenCalledWith("enrichment:pending");
     });
   });
 });
