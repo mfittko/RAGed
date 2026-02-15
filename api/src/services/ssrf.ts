@@ -1,0 +1,154 @@
+import { promises as dns } from "node:dns";
+
+export class SsrfError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SsrfError";
+  }
+}
+
+// Private IP ranges (CIDR notation)
+const PRIVATE_IPV4_RANGES = [
+  { start: [10, 0, 0, 0], end: [10, 255, 255, 255] },           // 10.0.0.0/8
+  { start: [172, 16, 0, 0], end: [172, 31, 255, 255] },         // 172.16.0.0/12
+  { start: [192, 168, 0, 0], end: [192, 168, 255, 255] },       // 192.168.0.0/16
+  { start: [127, 0, 0, 0], end: [127, 255, 255, 255] },         // 127.0.0.0/8 (loopback)
+  { start: [169, 254, 0, 0], end: [169, 254, 255, 255] },       // 169.254.0.0/16 (link-local)
+  { start: [0, 0, 0, 0], end: [0, 255, 255, 255] },             // 0.0.0.0/8 (non-routable)
+];
+
+// Cloud metadata IP
+const CLOUD_METADATA_IP = "169.254.169.254";
+
+// Blocked hostnames
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "0.0.0.0",
+]);
+
+function ipv4ToOctets(ip: string): number[] {
+  return ip.split(".").map(Number);
+}
+
+function isIpv4InRange(ip: string, range: { start: number[]; end: number[] }): boolean {
+  const octets = ipv4ToOctets(ip);
+  
+  for (let i = 0; i < 4; i++) {
+    if (octets[i] < range.start[i]) return false;
+    if (octets[i] > range.end[i]) return false;
+    if (octets[i] > range.start[i] && octets[i] < range.end[i]) return true;
+  }
+  
+  return true;
+}
+
+function isPrivateIpv4(ip: string): boolean {
+  // Check cloud metadata IP specifically
+  if (ip === CLOUD_METADATA_IP) {
+    return true;
+  }
+  
+  // Check private ranges
+  for (const range of PRIVATE_IPV4_RANGES) {
+    if (isIpv4InRange(ip, range)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+function isPrivateIpv6(ip: string): boolean {
+  // Loopback
+  if (ip === "::1") {
+    return true;
+  }
+  
+  // Link-local (fe80::/10)
+  if (ip.toLowerCase().startsWith("fe80:")) {
+    return true;
+  }
+  
+  // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+  if (ip.toLowerCase().includes("::ffff:")) {
+    const ipv4Part = ip.split("::ffff:")[1];
+    if (ipv4Part) {
+      return isPrivateIpv4(ipv4Part);
+    }
+  }
+  
+  return false;
+}
+
+function isPrivateIp(ip: string): boolean {
+  // Strip brackets from IPv6 addresses if present
+  let cleanIp = ip;
+  if (ip.startsWith("[") && ip.endsWith("]")) {
+    cleanIp = ip.slice(1, -1);
+  }
+  
+  if (cleanIp.includes(":")) {
+    return isPrivateIpv6(cleanIp);
+  }
+  return isPrivateIpv4(cleanIp);
+}
+
+export async function validateUrl(url: string): Promise<{ hostname: string; resolvedIp: string; port: number }> {
+  // Parse URL
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrfError(`Invalid URL: ${url}`);
+  }
+  
+  // Only allow http and https
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SsrfError(`Protocol not allowed: ${parsed.protocol}`);
+  }
+  
+  let hostname = parsed.hostname;
+  
+  // Check blocked hostnames
+  if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
+    throw new SsrfError(`Blocked hostname: ${hostname}`);
+  }
+  
+  // If hostname is already an IP, validate it directly
+  // For IPv6 addresses, the hostname will have brackets which we need to strip for validation
+  let ipToValidate = hostname;
+  
+  // Check if it's an IPv4 address
+  const isIpv4 = hostname.match(/^\d+\.\d+\.\d+\.\d+$/);
+  
+  // Check if it's an IPv6 address (will be in brackets in URL)
+  // Note: parsed.hostname strips brackets, but we need to check if it's IPv6
+  const isIpv6 = hostname.includes(":");
+  
+  if (isIpv4 || isIpv6) {
+    if (isPrivateIp(ipToValidate)) {
+      throw new SsrfError(`Private IP address not allowed: ${ipToValidate}`);
+    }
+    
+    const port = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === "https:" ? 443 : 80);
+    return { hostname, resolvedIp: ipToValidate, port };
+  }
+  
+  // DNS rebinding defense: resolve hostname to IP
+  let resolvedIp: string;
+  try {
+    const result = await dns.lookup(hostname, { family: 0 }); // 0 = IPv4 or IPv6
+    resolvedIp = result.address;
+  } catch (error) {
+    throw new SsrfError(`DNS lookup failed for ${hostname}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  
+  // Validate the resolved IP
+  if (isPrivateIp(resolvedIp)) {
+    throw new SsrfError(`Hostname ${hostname} resolves to private IP: ${resolvedIp}`);
+  }
+  
+  const port = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === "https:" ? 443 : 80);
+  
+  return { hostname, resolvedIp, port };
+}

@@ -1,0 +1,144 @@
+import { Readability } from "@mozilla/readability";
+import { JSDOM } from "jsdom";
+import pdfParse from "pdf-parse";
+
+export interface ExtractionResult {
+  text: string | null;        // null for unsupported types
+  title?: string;             // from HTML/PDF metadata
+  strategy: "readability" | "passthrough" | "pdf-parse" | "metadata-only";
+  contentType: string;
+}
+
+function normalizeContentType(contentType: string): string {
+  // Extract base content type (strip charset, etc.)
+  return contentType.split(";")[0].trim().toLowerCase();
+}
+
+export function extractContent(body: Buffer, contentType: string): ExtractionResult {
+  const normalized = normalizeContentType(contentType);
+  
+  // HTML extraction using Readability
+  if (normalized === "text/html") {
+    try {
+      const dom = new JSDOM(body.toString("utf-8"), { url: "https://example.com" });
+      const reader = new Readability(dom.window.document);
+      const article = reader.parse();
+      
+      if (article) {
+        return {
+          text: article.textContent,
+          title: article.title,
+          strategy: "readability",
+          contentType: normalized,
+        };
+      }
+      
+      // Fallback if Readability fails
+      return {
+        text: dom.window.document.body?.textContent || null,
+        strategy: "readability",
+        contentType: normalized,
+      };
+    } catch (error) {
+      // If parsing fails, return null
+      return {
+        text: null,
+        strategy: "readability",
+        contentType: normalized,
+      };
+    }
+  }
+  
+  // Plain text passthrough
+  if (normalized === "text/plain") {
+    return {
+      text: body.toString("utf-8"),
+      strategy: "passthrough",
+      contentType: normalized,
+    };
+  }
+  
+  // Markdown passthrough
+  if (normalized === "text/markdown") {
+    return {
+      text: body.toString("utf-8"),
+      strategy: "passthrough",
+      contentType: normalized,
+    };
+  }
+  
+  // JSON passthrough (pretty-print)
+  if (normalized === "application/json") {
+    try {
+      const parsed = JSON.parse(body.toString("utf-8"));
+      return {
+        text: JSON.stringify(parsed, null, 2),
+        strategy: "passthrough",
+        contentType: normalized,
+      };
+    } catch {
+      // If JSON parsing fails, return raw text
+      return {
+        text: body.toString("utf-8"),
+        strategy: "passthrough",
+        contentType: normalized,
+      };
+    }
+  }
+  
+  // PDF extraction
+  if (normalized === "application/pdf") {
+    try {
+      // pdf-parse expects a Buffer
+      const data = pdfParse(body);
+      
+      // pdf-parse returns a Promise, but we're in a sync function
+      // We need to handle this properly
+      return {
+        text: null, // Will be filled in by async wrapper
+        strategy: "pdf-parse",
+        contentType: normalized,
+      };
+    } catch {
+      return {
+        text: null,
+        strategy: "pdf-parse",
+        contentType: normalized,
+      };
+    }
+  }
+  
+  // Unsupported content type - metadata only
+  return {
+    text: null,
+    strategy: "metadata-only",
+    contentType: normalized,
+  };
+}
+
+// Async version for PDF extraction
+export async function extractContentAsync(body: Buffer, contentType: string): Promise<ExtractionResult> {
+  const normalized = normalizeContentType(contentType);
+  
+  // PDF extraction (async)
+  if (normalized === "application/pdf") {
+    try {
+      const data = await pdfParse(body);
+      return {
+        text: data.text,
+        title: data.info?.Title,
+        strategy: "pdf-parse",
+        contentType: normalized,
+      };
+    } catch {
+      return {
+        text: null,
+        strategy: "pdf-parse",
+        contentType: normalized,
+      };
+    }
+  }
+  
+  // For all other types, use the sync version
+  return extractContent(body, contentType);
+}
