@@ -58,7 +58,8 @@ spec:
 
                   def check_tcp(host, port, timeout=2):
                       if not host or not port:
-                          return True
+                          # Fail if configuration is missing
+                          return False
                       try:
                           port = int(port)
                           with socket.create_connection((host, port), timeout=timeout):

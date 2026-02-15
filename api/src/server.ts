@@ -40,18 +40,17 @@ export function buildApp() {
     origin: corsOrigin,
   });
 
+  // Health check endpoint - registered before rate limiting to avoid rate limit issues
+  app.get("/healthz", async () => ({ ok: true }));
+
   // Register rate limiting with env-configurable max
   const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX || "100", 10);
   app.register(rateLimit, {
     max: rateLimitMax,
     timeWindow: "1 minute",
-    skipOnError: true,
   });
 
   registerAuth(app);
-
-  // Health check endpoint - registered without rate limiting by using skipOnError
-  app.get("/healthz", async () => ({ ok: true }));
 
   app.post("/ingest", { 
     schema: ingestSchema,
