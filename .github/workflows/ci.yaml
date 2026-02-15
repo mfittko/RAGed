@@ -133,6 +133,8 @@ jobs:
           context: ${{ matrix.context }}
           push: false
           tags: ${{ matrix.tag }}
+          cache-from: type=gha,scope=docker-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.component }}
 
   docker-build-worker:
     runs-on: ubuntu-latest
@@ -148,6 +150,8 @@ jobs:
           context: ./worker
           push: false
           tags: rag-worker:ci
+          cache-from: type=gha,scope=docker-worker
+          cache-to: type=gha,mode=max,scope=docker-worker
 
   helm-lint:
     runs-on: ubuntu-latest
