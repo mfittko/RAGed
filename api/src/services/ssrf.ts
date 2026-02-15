@@ -117,8 +117,9 @@ function isPrivateIpv6(ip: string): boolean {
     return true;
   }
   
-  // Link-local (fe80::/10)
-  if (lowerIp.startsWith("fe80:")) {
+  // Link-local (fe80::/10) - must check numerically for full range
+  // fe80::/10 covers fe80:: through febf::
+  if (firstHextetNum >= 0xfe80 && firstHextetNum <= 0xfebf) {
     return true;
   }
   

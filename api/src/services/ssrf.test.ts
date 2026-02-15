@@ -106,8 +106,11 @@ describe("SSRF guard", () => {
       await expect(validateUrl("http://[::1]/")).rejects.toThrow(SsrfError);
     });
 
-    it("blocks link-local fe80::", async () => {
+    it("blocks link-local fe80::/10 range", async () => {
       await expect(validateUrl("http://[fe80::1]/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://[fe90::1]/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://[fea0::1]/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://[febf::1]/")).rejects.toThrow(SsrfError);
     });
 
     it("blocks unique local addresses (fc00::/7)", async () => {

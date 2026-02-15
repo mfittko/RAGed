@@ -46,25 +46,14 @@ async function fetchSingleUrl(context: FetchContext): Promise<FetchResult> {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    // Construct URL using resolved IP to prevent DNS rebinding
-    const parsedUrl = new URL(context.currentUrl);
-    let fetchUrl: string;
-    
-    // Use resolved IP instead of hostname for DNS rebinding protection
-    if (validationResult.resolvedIp.includes(":")) {
-      // IPv6 address - needs brackets
-      fetchUrl = `${parsedUrl.protocol}//[${validationResult.resolvedIp}]:${validationResult.port}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
-    } else {
-      // IPv4 address
-      fetchUrl = `${parsedUrl.protocol}//${validationResult.resolvedIp}:${validationResult.port}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
-    }
-    
-    const response = await fetch(fetchUrl, {
+    // Note: We use the original hostname in the URL to preserve TLS certificate validation for HTTPS.
+    // This creates a small DNS rebinding window between validation and fetch, but is necessary
+    // for proper HTTPS operation. The native fetch API doesn't support custom DNS resolution
+    // without breaking TLS SNI/certificate validation.
+    const response = await fetch(context.currentUrl, {
       headers: {
         "User-Agent": USER_AGENT,
         "Accept-Encoding": "gzip, deflate, br",
-        // Include Host header with original hostname for virtual hosting
-        "Host": validationResult.hostname,
       },
       signal: controller.signal,
       redirect: "manual", // Handle redirects manually
@@ -179,15 +168,14 @@ async function fetchWithConcurrency<T>(
   concurrency: number,
   fn: (item: T) => Promise<void>
 ): Promise<void> {
-  const queue = [...items];
+  let nextIndex = 0;
   const workers: Promise<void>[] = [];
 
   async function worker(): Promise<void> {
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (item) {
-        await fn(item);
-      }
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) break;
+      await fn(items[index]);
     }
   }
 
