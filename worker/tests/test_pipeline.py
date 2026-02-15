@@ -78,7 +78,7 @@ async def test_process_task_single_chunk(mock_task):
         mock_db.update_document_summary = AsyncMock()
         mock_db.upsert_entity = AsyncMock(return_value="entity-uuid-1")
         mock_db.add_document_mention = AsyncMock()
-        
+
         # Mock adapter responses
         mock_adapter.extract_metadata = AsyncMock(
             return_value={
@@ -117,7 +117,7 @@ async def test_process_task_multi_chunk(mock_task):
         mock_db.get_chunks_text = AsyncMock(return_value=["chunk 0", "chunk 1", "chunk 2"])
         mock_db.update_document_summary = AsyncMock()
         mock_db.upsert_entity = AsyncMock(return_value="entity-uuid-1")
-        
+
         # Mock adapter responses
         mock_adapter.extract_metadata = AsyncMock(return_value={"summary": "Test function"})
         mock_adapter.extract_entities = AsyncMock(
@@ -155,7 +155,7 @@ async def test_process_task_handles_error(mock_task):
         mock_db.get_document_id_by_base_id = AsyncMock(return_value="doc-uuid-1")
         mock_db.update_chunk_status = AsyncMock()
         mock_db.update_chunk_tier2 = AsyncMock()
-        
+
         # Make adapter raise an error during tier2 update
         # Set update_chunk_tier2 to raise an error instead
         mock_db.update_chunk_tier2.side_effect = RuntimeError("Test error")
@@ -166,7 +166,8 @@ async def test_process_task_handles_error(mock_task):
 
         # Verify status was set to failed
         failed_calls = [
-            call for call in mock_db.update_chunk_status.call_args_list
+            call
+            for call in mock_db.update_chunk_status.call_args_list
             if len(call[0]) >= 4 and call[0][3] == "failed"
         ]
 
