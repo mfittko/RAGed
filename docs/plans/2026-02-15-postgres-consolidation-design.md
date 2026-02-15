@@ -83,6 +83,8 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Documents (new first-class concept, currently implicit via baseId)
 CREATE TABLE documents (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- Natural identity key for idempotent re-ingest (derived from canonical source path/URL)
+    identity_key  TEXT NOT NULL,
     source        TEXT NOT NULL,
     item_url      TEXT,
     doc_type      TEXT,
@@ -99,7 +101,8 @@ CREATE TABLE documents (
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now(),
     ingested_at   TIMESTAMPTZ DEFAULT now(),
-    last_seen     TIMESTAMPTZ DEFAULT now()
+    last_seen     TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(collection, identity_key)
 );
 
 CREATE INDEX idx_documents_source ON documents (source);
@@ -108,6 +111,21 @@ CREATE INDEX idx_documents_repo_id ON documents (repo_id);
 CREATE INDEX idx_documents_doc_type ON documents (doc_type);
 CREATE INDEX idx_documents_path ON documents (path);
 CREATE INDEX idx_documents_lang ON documents (lang);
+
+-- Keep freshness timestamps correct on update/re-ingest
+CREATE FUNCTION touch_documents_timestamps()
+RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at := now();
+    NEW.last_seen := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_documents_touch
+BEFORE UPDATE ON documents
+FOR EACH ROW
+EXECUTE FUNCTION touch_documents_timestamps();
 
 -- Chunks (replaces Qdrant points)
 CREATE TABLE chunks (
@@ -182,7 +200,7 @@ CREATE TABLE task_queue (
 );
 
 CREATE INDEX idx_task_queue_dequeue
-    ON task_queue (queue, run_after)
+    ON task_queue (queue, run_after, created_at)
     WHERE status = 'pending';
 ```
 
@@ -190,6 +208,7 @@ CREATE INDEX idx_task_queue_dequeue
 
 | Current | Postgres |
 |---------|----------|
+| document upsert | `INSERT INTO documents ... ON CONFLICT (collection, identity_key) DO UPDATE SET ...` |
 | `qdrant.upsert(points)` | `INSERT INTO chunks ... ON CONFLICT (document_id, chunk_index) DO UPDATE` |
 | `qdrant.search(vector, limit, filter)` | `SELECT ... ORDER BY embedding <=> $1 LIMIT $n` |
 | `qdrant.scroll(filter)` | `SELECT ... WHERE ... LIMIT $n OFFSET $o` |
@@ -206,7 +225,7 @@ CREATE INDEX idx_task_queue_dequeue
 WITH next AS (
     SELECT id FROM task_queue
     WHERE queue = 'enrichment' AND status = 'pending' AND run_after <= now()
-    ORDER BY created_at
+    ORDER BY run_after, created_at
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
