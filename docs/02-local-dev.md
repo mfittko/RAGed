@@ -90,7 +90,7 @@ curl -s http://localhost:8080/enrichment/stats
 |---------|------|---------|
 | `redis` | 6379 | Task queue for async enrichment |
 | `neo4j` | 7474 (HTTP), 7687 (Bolt) | Knowledge graph database |
-| `worker` | - | Python enrichment worker (background service) |
+| `enrichment-worker` | - | Python enrichment worker (background service) |
 
 ## Optional: Enable Auth Locally
 
@@ -111,10 +111,10 @@ Enrichment is enabled via Docker Compose profiles. To customize enrichment behav
 ```yaml
 environment:
   ENRICHMENT_ENABLED: "true"  # Enable enrichment features
-  REDIS_URL: "redis://redis:6379"  # Task queue (auto-set in profile)
-  NEO4J_URL: "bolt://neo4j:7687"  # Knowledge graph (auto-set in profile)
+  REDIS_URL: "redis://redis:6379"  # Task queue (must be set manually)
+  NEO4J_URL: "bolt://neo4j:7687"  # Knowledge graph (must be set manually)
   NEO4J_USER: "neo4j"
-  NEO4J_PASSWORD: "password"
+  NEO4J_PASSWORD: ""  # Default docker-compose uses NEO4J_AUTH=none
 ```
 
 **Worker service:**
@@ -127,8 +127,10 @@ environment:
   NEO4J_USER: "neo4j"
   NEO4J_PASSWORD: "password"
   WORKER_CONCURRENCY: "4"  # Number of concurrent tasks
-  LLM_PROVIDER: "ollama"  # Options: ollama, anthropic, openai
-  OLLAMA_MODEL: "llama3"  # LLM for tier-3 extraction
+  EXTRACTOR_PROVIDER: "ollama"  # Options: ollama, anthropic, openai
+  EXTRACTOR_MODEL_FAST: "llama3"  # Fast model for quick extraction
+  EXTRACTOR_MODEL_CAPABLE: "llama3"  # Capable model for complex extraction
+  EXTRACTOR_MODEL_VISION: "llava"  # Vision model for image inputs
 ```
 
 ## Tear Down

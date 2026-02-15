@@ -113,8 +113,8 @@ helm install rag ./chart -n rag --create-namespace \
   --set api.auth.enabled=true \
   --set api.auth.token=REPLACE_ME \
   --set enrichment.enabled=true \
-  --set worker.image.repository=your-registry/rag-worker \
-  --set worker.image.tag=0.5.0 \
+  --set enrichment.worker.image.repository=your-registry/rag-worker \
+  --set enrichment.worker.image.tag=0.5.0 \
   --set neo4j.auth.password=REPLACE_NEO4J_PASSWORD
 ```
 
@@ -140,15 +140,17 @@ helm install rag ./chart -n rag --create-namespace \
 | Value | Default | Description |
 |-------|---------|-------------|
 | `enrichment.enabled` | `false` | Enable enrichment stack (Redis, Neo4j, worker) |
-| `worker.replicas` | `1` | Number of enrichment worker pods |
-| `worker.concurrency` | `4` | Concurrent tasks per worker |
-| `worker.llmProvider` | `ollama` | LLM provider: `ollama`, `anthropic`, or `openai` |
-| `worker.ollamaModel` | `llama3` | Ollama model for tier-3 extraction |
+| `enrichment.worker.replicas` | `1` | Number of enrichment worker pods |
+| `enrichment.worker.concurrency` | `4` | Concurrent tasks per worker |
+| `enrichment.worker.extractor.provider` | `ollama` | LLM provider: `ollama`, `anthropic`, or `openai` |
+| `enrichment.worker.extractor.modelFast` | `llama3` | Fast model for high-throughput extraction |
+| `enrichment.worker.extractor.modelCapable` | `llama3` | Capable model for complex extraction |
+| `enrichment.worker.extractor.modelVision` | `llava` | Vision model for image-based extraction |
 | `redis.enabled` | `true` (if enrichment enabled) | Deploy Redis task queue |
 | `redis.storage.size` | `5Gi` | Redis persistent volume size |
 | `neo4j.enabled` | `true` (if enrichment enabled) | Deploy Neo4j knowledge graph |
-| `neo4j.storage.size` | `10Gi` | Neo4j persistent volume size |
-| `neo4j.auth.password` | `password` | Neo4j password (change in production!) |
+| `neo4j.storage.size` | `20Gi` | Neo4j persistent volume size |
+| `neo4j.auth.password` | `""` | Neo4j password (set in production!) |
 
 See [values.yaml](../chart/values.yaml) for the full list.
 

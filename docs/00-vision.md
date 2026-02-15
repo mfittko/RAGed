@@ -59,7 +59,7 @@ What exists:
 
 **Metadata extraction pipeline:**
 - ✅ **Tiered extraction:** tier-1 (sync, heuristic/AST/EXIF) → tier-2 (async, spaCy NLP) → tier-3 (async, LLM)
-- ✅ **9 document types:** code, Slack, email, meeting notes, images, PDFs, articles, text, generic
+- ✅ **8 document types:** code, Slack, email, meeting notes, images, PDFs, articles, text
 - ✅ **Auto-detection:** Document type inference from file extension and content
 - ✅ **Pluggable LLM adapter:** Ollama (local), Anthropic, OpenAI with smart model routing
 - ✅ **Async enrichment worker** in Python with Redis task queue
@@ -84,7 +84,7 @@ What exists:
 - ✅ `rag-index ingest` — Ingest arbitrary files (PDFs, images, Slack exports)
 - ✅ `rag-index enrich` — Trigger and monitor enrichment with `--force` and `--stats-only` flags
 - ✅ `rag-index graph` — Query knowledge graph entities
-- ✅ `--enrich` / `--no-enrich` / `--doc-type` flags on all ingest commands
+- ✅ `--no-enrich` / `--doc-type` flags on ingest commands (enrichment is on by default when enabled server-side)
 
 **Infrastructure:**
 - ✅ Docker Compose profiles: `--profile enrichment` for full stack (Redis, Neo4j, worker)

@@ -112,12 +112,12 @@ docker compose restart api
 curl -s http://localhost:8080/enrichment/stats | jq .
 
 # Check worker is running
-docker compose ps worker
+docker compose ps enrichment-worker
 # or
 kubectl get pods -l app=worker -n rag
 
 # Check worker logs
-docker compose logs worker --tail 50
+docker compose logs enrichment-worker --tail 50
 # or
 kubectl logs -l app=worker -n rag --tail 50
 
@@ -131,7 +131,7 @@ docker compose exec redis redis-cli LLEN enrichment:pending
 docker compose exec redis redis-cli LLEN enrichment:dead-letter
 
 # Restart worker if stuck
-docker compose restart worker
+docker compose restart enrichment-worker
 # or
 kubectl rollout restart deployment/worker -n rag
 ```
@@ -151,8 +151,9 @@ kubectl get pods -l app=neo4j -n rag
 # Check Neo4j credentials in API config
 docker compose exec api env | grep NEO4J
 
-# Test Neo4j connection directly
-docker compose exec neo4j cypher-shell -u neo4j -p password "MATCH (n) RETURN count(n);"
+# Test Neo4j connection directly (default docker-compose uses auth=none)
+docker compose exec neo4j cypher-shell "MATCH (n) RETURN count(n);"
+# If auth is enabled: cypher-shell -u neo4j -p <password> "MATCH (n) RETURN count(n);"
 
 # Check Neo4j logs
 docker compose logs neo4j --tail 50
@@ -171,10 +172,10 @@ kubectl logs -l app=neo4j -n rag --tail 50
 docker compose exec redis redis-cli LRANGE enrichment:dead-letter 0 10
 
 # Check worker logs for errors
-docker compose logs worker --tail 100 | grep -i error
+docker compose logs enrichment-worker --tail 100 | grep -i error
 
-# Verify LLM provider is configured
-docker compose exec worker env | grep -E "LLM_PROVIDER|OLLAMA_URL|ANTHROPIC_API_KEY|OPENAI_API_KEY"
+# Verify extractor provider is configured
+docker compose exec enrichment-worker env | grep -E "EXTRACTOR_PROVIDER|OLLAMA_URL|ANTHROPIC_API_KEY|OPENAI_API_KEY"
 
 # If using Ollama, check LLM model is pulled
 curl -s http://localhost:11434/api/tags | jq '.models[] | select(.name | contains("llama"))'
@@ -206,7 +207,7 @@ docker compose --profile enrichment up -d
 
 # Check Neo4j browser (if exposed)
 open http://localhost:7474
-# Login: neo4j / password
+# Default docker-compose: no auth required. For production: neo4j / <your-password>
 ```
 
 ## Worker High Memory Usage
@@ -221,10 +222,10 @@ open http://localhost:7474
 WORKER_CONCURRENCY: "2"  # Default is 4
 
 # Restart worker with new setting
-docker compose restart worker
+docker compose restart enrichment-worker
 
 # Monitor worker memory
-docker stats worker
+docker stats enrichment-worker
 # or
 kubectl top pods -l app=worker -n rag
 ```

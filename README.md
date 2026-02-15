@@ -12,6 +12,8 @@ graph LR
     API -->|enqueue| Redis
     Worker -->|process| Redis
     Worker -->|extract| Neo4j
+    Worker -->|update| Qdrant
+    Worker -->|extract (tier-3)| Ollama
 
     style API fill:#e1f5fe
     style Qdrant fill:#f3e5f5
