@@ -41,6 +41,11 @@ describe("SSRF guard", () => {
       await expect(validateUrl("http://169.254.0.1/")).rejects.toThrow(SsrfError);
       await expect(validateUrl("http://169.254.255.255/")).rejects.toThrow(SsrfError);
     });
+
+    it("blocks CGNAT range (100.64.0.0/10)", async () => {
+      await expect(validateUrl("http://100.64.0.0/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://100.127.255.255/")).rejects.toThrow(SsrfError);
+    });
   });
 
   describe("cloud metadata IP", () => {
@@ -55,6 +60,12 @@ describe("SSRF guard", () => {
       await expect(validateUrl("http://localhost/")).rejects.toThrow(SsrfError);
       await expect(validateUrl("http://localhost/")).rejects.toThrow("Blocked hostname");
     });
+
+    it("blocks localhost variants", async () => {
+      await expect(validateUrl("http://localhost.localdomain/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://ip6-localhost/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://ip6-loopback/")).rejects.toThrow(SsrfError);
+    });
   });
 
   describe("IPv6 addresses", () => {
@@ -64,6 +75,15 @@ describe("SSRF guard", () => {
 
     it("blocks link-local fe80::", async () => {
       await expect(validateUrl("http://[fe80::1]/")).rejects.toThrow(SsrfError);
+    });
+
+    it("blocks unique local addresses (fc00::/7)", async () => {
+      await expect(validateUrl("http://[fc00::1]/")).rejects.toThrow(SsrfError);
+      await expect(validateUrl("http://[fd00::1]/")).rejects.toThrow(SsrfError);
+    });
+
+    it("blocks deprecated site-local addresses (fec0::/10)", async () => {
+      await expect(validateUrl("http://[fec0::1]/")).rejects.toThrow(SsrfError);
     });
   });
 

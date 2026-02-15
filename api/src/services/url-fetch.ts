@@ -25,12 +25,16 @@ interface FetchContext {
   originalUrl: string;
   currentUrl: string;
   redirectCount: number;
+  resolvedIp?: string;  // Resolved IP from SSRF validation
+  hostname?: string;    // Original hostname
+  port?: number;        // Port from validated URL
 }
 
 async function fetchSingleUrl(context: FetchContext): Promise<FetchResult> {
-  // Validate URL for SSRF
+  // Validate URL for SSRF and get resolved IP
+  let validationResult: { hostname: string; resolvedIp: string; port: number };
   try {
-    await validateUrl(context.currentUrl);
+    validationResult = await validateUrl(context.currentUrl);
   } catch (error) {
     if (error instanceof SsrfError) {
       throw { url: context.originalUrl, status: null, reason: "ssrf_blocked" as const };
@@ -42,10 +46,25 @@ async function fetchSingleUrl(context: FetchContext): Promise<FetchResult> {
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetch(context.currentUrl, {
+    // Construct URL using resolved IP to prevent DNS rebinding
+    const parsedUrl = new URL(context.currentUrl);
+    let fetchUrl: string;
+    
+    // Use resolved IP instead of hostname for DNS rebinding protection
+    if (validationResult.resolvedIp.includes(":")) {
+      // IPv6 address - needs brackets
+      fetchUrl = `${parsedUrl.protocol}//[${validationResult.resolvedIp}]:${validationResult.port}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+    } else {
+      // IPv4 address
+      fetchUrl = `${parsedUrl.protocol}//${validationResult.resolvedIp}:${validationResult.port}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+    }
+    
+    const response = await fetch(fetchUrl, {
       headers: {
         "User-Agent": USER_AGENT,
         "Accept-Encoding": "gzip, deflate, br",
+        // Include Host header with original hostname for virtual hosting
+        "Host": validationResult.hostname,
       },
       signal: controller.signal,
       redirect: "manual", // Handle redirects manually
@@ -73,14 +92,15 @@ async function fetchSingleUrl(context: FetchContext): Promise<FetchResult> {
         throw { url: context.originalUrl, status: response.status, reason: "fetch_failed" as const };
       }
 
-      // Validate redirect protocol (only HTTP→HTTPS or same-protocol)
-      const currentProto = new URL(context.currentUrl).protocol;
+      // Validate redirect protocol - only allow HTTP(S)
       const redirectProto = new URL(redirectUrl).protocol;
       
-      if (currentProto === "http:" && redirectProto !== "http:" && redirectProto !== "https:") {
+      if (redirectProto !== "http:" && redirectProto !== "https:") {
         throw { url: context.originalUrl, status: response.status, reason: "ssrf_blocked" as const };
       }
       
+      // Prevent HTTPS → HTTP downgrade
+      const currentProto = new URL(context.currentUrl).protocol;
       if (currentProto === "https:" && redirectProto !== "https:") {
         throw { url: context.originalUrl, status: response.status, reason: "ssrf_blocked" as const };
       }
@@ -113,6 +133,8 @@ async function fetchSingleUrl(context: FetchContext): Promise<FetchResult> {
           
           totalSize += value.length;
           if (totalSize > MAX_RESPONSE_BYTES) {
+            // Cancel the stream before throwing
+            await reader.cancel();
             throw { url: context.originalUrl, status: response.status, reason: "too_large" as const };
           }
           

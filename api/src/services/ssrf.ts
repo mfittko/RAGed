@@ -15,6 +15,7 @@ const PRIVATE_IPV4_RANGES = [
   { start: [127, 0, 0, 0], end: [127, 255, 255, 255] },         // 127.0.0.0/8 (loopback)
   { start: [169, 254, 0, 0], end: [169, 254, 255, 255] },       // 169.254.0.0/16 (link-local)
   { start: [0, 0, 0, 0], end: [0, 255, 255, 255] },             // 0.0.0.0/8 (non-routable)
+  { start: [100, 64, 0, 0], end: [100, 127, 255, 255] },        // 100.64.0.0/10 (CGNAT, RFC 6598)
 ];
 
 // Cloud metadata IP
@@ -23,11 +24,39 @@ const CLOUD_METADATA_IP = "169.254.169.254";
 // Blocked hostnames
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
+  "localhost.localdomain",
+  "ip6-localhost",
+  "ip6-loopback",
   "0.0.0.0",
 ]);
 
 function ipv4ToOctets(ip: string): number[] {
-  return ip.split(".").map(Number);
+  const parts = ip.split(".");
+  
+  // Ensure exactly 4 octets
+  if (parts.length !== 4) {
+    throw new SsrfError(`Invalid IPv4 address (expected 4 octets): "${ip}"`);
+  }
+  
+  const octets: number[] = [];
+  
+  for (const part of parts) {
+    // Each octet must be digits only
+    if (!/^\d+$/.test(part)) {
+      throw new SsrfError(`Invalid IPv4 address (non-numeric octet): "${ip}"`);
+    }
+    
+    const value = Number(part);
+    
+    // Each octet must be within 0-255
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new SsrfError(`Invalid IPv4 address (octet out of range 0-255): "${ip}"`);
+    }
+    
+    octets.push(value);
+  }
+  
+  return octets;
 }
 
 function isIpv4InRange(ip: string, range: { start: number[]; end: number[] }): boolean {
@@ -68,19 +97,35 @@ function isPrivateIpv4(ip: string): boolean {
 }
 
 function isPrivateIpv6(ip: string): boolean {
-  // Loopback
-  if (ip === "::1") {
+  const lowerIp = ip.toLowerCase();
+  
+  // Loopback (::1/128)
+  if (lowerIp === "::1") {
+    return true;
+  }
+  
+  // Extract first hextet for range checks
+  const firstHextet = lowerIp.split(":")[0];
+  
+  // Unique local addresses (fc00::/7, includes fc00::/8 and fd00::/8)
+  if (firstHextet.startsWith("fc") || firstHextet.startsWith("fd")) {
+    return true;
+  }
+  
+  // Deprecated site-local addresses (fec0::/10)
+  const firstHextetNum = parseInt(firstHextet, 16);
+  if (!Number.isNaN(firstHextetNum) && firstHextetNum >= 0xfec0 && firstHextetNum <= 0xfeff) {
     return true;
   }
   
   // Link-local (fe80::/10)
-  if (ip.toLowerCase().startsWith("fe80:")) {
+  if (lowerIp.startsWith("fe80:")) {
     return true;
   }
   
   // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
-  if (ip.toLowerCase().includes("::ffff:")) {
-    const ipv4Part = ip.split("::ffff:")[1];
+  if (lowerIp.includes("::ffff:")) {
+    const ipv4Part = lowerIp.split("::ffff:")[1];
     if (ipv4Part) {
       return isPrivateIpv4(ipv4Part);
     }

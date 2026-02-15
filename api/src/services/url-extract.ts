@@ -18,6 +18,11 @@ export interface ExtractionResult {
  */
 
 function normalizeContentType(contentType: string): string {
+  // Handle edge cases
+  if (!contentType || typeof contentType !== "string") {
+    return "application/octet-stream";
+  }
+  
   // Extract base content type (strip charset, etc.)
   return contentType.split(";")[0].trim().toLowerCase();
 }
