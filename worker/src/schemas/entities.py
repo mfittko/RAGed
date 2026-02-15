@@ -1,6 +1,6 @@
 """Entity and relationship extraction schema."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Entity(BaseModel):
@@ -23,8 +23,8 @@ class Relationship(BaseModel):
 class EntityExtractionResult(BaseModel):
     """Result of entity and relationship extraction."""
 
-    entities: list[Entity] = []
-    relationships: list[Relationship] = []
+    entities: list[Entity] = Field(default_factory=list)
+    relationships: list[Relationship] = Field(default_factory=list)
 
 
 # Prompt template for entity extraction

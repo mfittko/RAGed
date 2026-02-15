@@ -98,7 +98,12 @@ def detect_language(text: str) -> str:
     try:
         return detect(normalized)
     except Exception as e:
-        logger.debug(f"Language detection failed for text: {e}")
+        logger.debug(
+            "Language detection failed for text snippet %r: %s",
+            normalized[:100],
+            e,
+            exc_info=True,
+        )
         return "unknown"
 
 

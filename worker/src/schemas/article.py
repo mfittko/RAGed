@@ -1,14 +1,14 @@
 """Article/blog post metadata extraction schema."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ArticleMetadata(BaseModel):
     """Metadata extracted from articles and blog posts."""
 
     summary: str
-    takeaways: list[str] = []
-    tags: list[str] = []
+    takeaways: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     target_audience: str = ""
 
 

@@ -1,6 +1,6 @@
 """Meeting notes metadata extraction schema."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ActionItem(BaseModel):
@@ -21,9 +21,9 @@ class TopicSegment(BaseModel):
 class MeetingMetadata(BaseModel):
     """Metadata extracted from meeting notes."""
 
-    decisions: list[str] = []
-    action_items: list[ActionItem] = []
-    topic_segments: list[TopicSegment] = []
+    decisions: list[str] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=list)
+    topic_segments: list[TopicSegment] = Field(default_factory=list)
 
 
 # Prompt template for meeting metadata extraction
