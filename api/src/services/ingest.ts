@@ -96,26 +96,32 @@ export async function ingest(
     
     // Extract content from successful fetches with bounded concurrency
     const MAX_CONCURRENT_EXTRACTIONS = 5;
-    const extractionPromises: Promise<void>[] = [];
-    let nextIndex = 0;
     
-    async function processExtractionItem() {
+    // Pre-build work queue to avoid shared state mutations
+    const extractionTasks: Array<{ item: IngestItem; fetchResult: any }> = [];
+    for (const item of urlItems) {
+      const fetchResult = results.get(item.url!);
+      if (fetchResult) {
+        extractionTasks.push({ item, fetchResult });
+      }
+    }
+    
+    // Process extractions with bounded concurrency
+    let nextTaskIndex = 0;
+    
+    async function processExtractionTask(): Promise<void> {
       while (true) {
-        const index = nextIndex++;
-        if (index >= urlItems.length) break;
+        // Get next task synchronously (safe in JS event loop)
+        const taskIndex = nextTaskIndex++;
+        if (taskIndex >= extractionTasks.length) break;
         
-        const item = urlItems[index];
-        const fetchResult = results.get(item.url!);
-        if (!fetchResult) {
-          // Already in errors
-          continue;
-        }
+        const { item, fetchResult } = extractionTasks[taskIndex];
         
         // Extract text from fetched content
         const extraction = await extractContentAsync(fetchResult.body, fetchResult.contentType);
         
         if (extraction.strategy === "metadata-only" || !extraction.text) {
-          // Unsupported content type - add to errors
+          // Unsupported content type - add to errors (synchronous push is safe)
           fetchErrors.push({
             url: item.url!,
             status: fetchResult.status,
@@ -145,18 +151,19 @@ export async function ingest(
           item.metadata.extractedTitle = extraction.title;
         }
         
-        // Move to textItems for normal processing
+        // Move to textItems for normal processing (synchronous push is safe)
         textItems.push(item);
         fetchedCount++;
       }
     }
     
     // Start bounded concurrent extraction workers
-    for (let i = 0; i < Math.min(MAX_CONCURRENT_EXTRACTIONS, urlItems.length); i++) {
-      extractionPromises.push(processExtractionItem());
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < Math.min(MAX_CONCURRENT_EXTRACTIONS, extractionTasks.length); i++) {
+      workers.push(processExtractionTask());
     }
     
-    await Promise.all(extractionPromises);
+    await Promise.all(workers);
   }
   
   // Pre-process items to assign stable baseIds and detect metadata
