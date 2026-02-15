@@ -386,9 +386,9 @@ async function cmdEnrich(options: any) {
   const token = options.token;
   const collection = options.collection || "docs";
   const force = Boolean(options.force);
-  const showFailed = Boolean(options.showFailed);
+  const statsOnly = Boolean(options.statsOnly);
 
-  if (showFailed || !force) {
+  if (statsOnly || !force) {
     // Get enrichment stats (shown by default unless forcing re-enqueue)
     const res = await fetch(`${api.replace(/\/$/, "")}/enrichment/stats`, {
       method: "GET",
@@ -415,7 +415,7 @@ async function cmdEnrich(options: any) {
     console.log("");
   }
 
-  if (showFailed) {
+  if (statsOnly) {
     // Only show stats, don't enqueue
     return;
   }
@@ -543,7 +543,7 @@ async function main() {
     .option("--api <url>", "RAG API URL", "http://localhost:8080")
     .option("--collection <name>", "Qdrant collection name", "docs")
     .option("--token <token>", "Bearer token for auth")
-    .option("--maxFiles <n>", "Maximum files to process from directory", String(DEFAULT_MAX_FILES))
+    .option("--maxFiles <number>", "Maximum files to process from directory", String(DEFAULT_MAX_FILES))
     .option("--no-enrich", "Disable enrichment")
     .option("--doc-type <type>", "Override document type detection")
     .action(cmdIngest);
@@ -555,7 +555,7 @@ async function main() {
     .option("--collection <name>", "Qdrant collection name", "docs")
     .option("--token <token>", "Bearer token for auth")
     .option("--force", "Re-enqueue all items (including already-enriched)", false)
-    .option("--show-failed", "Show enrichment stats only", false)
+    .option("--stats-only", "Show enrichment stats without enqueueing", false)
     .action(cmdEnrich);
 
   program
