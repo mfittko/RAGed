@@ -9,6 +9,14 @@ export interface ExtractionResult {
   contentType: string;
 }
 
+/**
+ * Extraction strategies:
+ * - readability: Uses Mozilla's Readability library to extract article content from HTML
+ * - passthrough: Returns the content as-is (for text/plain, text/markdown, application/json)
+ * - pdf-parse: Extracts text from PDF documents
+ * - metadata-only: Used for unsupported formats (returns null text)
+ */
+
 function normalizeContentType(contentType: string): string {
   // Extract base content type (strip charset, etc.)
   return contentType.split(";")[0].trim().toLowerCase();
@@ -86,26 +94,13 @@ export function extractContent(body: Buffer, contentType: string): ExtractionRes
     }
   }
   
-  // PDF extraction
+  // PDF extraction requires async - use extractContentAsync instead
   if (normalized === "application/pdf") {
-    try {
-      // pdf-parse expects a Buffer
-      const data = pdfParse(body);
-      
-      // pdf-parse returns a Promise, but we're in a sync function
-      // We need to handle this properly
-      return {
-        text: null, // Will be filled in by async wrapper
-        strategy: "pdf-parse",
-        contentType: normalized,
-      };
-    } catch {
-      return {
-        text: null,
-        strategy: "pdf-parse",
-        contentType: normalized,
-      };
-    }
+    return {
+      text: null,
+      strategy: "pdf-parse",
+      contentType: normalized,
+    };
   }
   
   // Unsupported content type - metadata only

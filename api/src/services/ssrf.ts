@@ -33,12 +33,21 @@ function ipv4ToOctets(ip: string): number[] {
 function isIpv4InRange(ip: string, range: { start: number[]; end: number[] }): boolean {
   const octets = ipv4ToOctets(ip);
   
+  // Compare octets from most significant to least significant
   for (let i = 0; i < 4; i++) {
     if (octets[i] < range.start[i]) return false;
     if (octets[i] > range.end[i]) return false;
+    
+    // If this octet is within the range bounds but not equal to either bound,
+    // then all remaining octets are automatically within range
     if (octets[i] > range.start[i] && octets[i] < range.end[i]) return true;
+    
+    // If this octet equals the start, we need to check the next octet
+    // If this octet equals the end, we need to check the next octet
+    // Continue to next iteration
   }
   
+  // All octets matched exactly
   return true;
 }
 

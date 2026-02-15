@@ -17,6 +17,16 @@ describe("SSRF guard", () => {
       await expect(validateUrl("http://172.16.0.1/")).rejects.toThrow(SsrfError);
       await expect(validateUrl("http://172.31.255.255/")).rejects.toThrow(SsrfError);
     });
+    
+    it("allows IPs just outside 172.16.x.x range", async () => {
+      // 172.15.x.x should be allowed (just before 172.16.0.0)
+      const result = await validateUrl("http://172.15.255.255/");
+      expect(result.hostname).toBe("172.15.255.255");
+      
+      // 172.32.x.x should be allowed (just after 172.31.255.255)
+      const result2 = await validateUrl("http://172.32.0.0/");
+      expect(result2.hostname).toBe("172.32.0.0");
+    });
 
     it("blocks 192.168.x.x range", async () => {
       await expect(validateUrl("http://192.168.0.1/")).rejects.toThrow(SsrfError);
