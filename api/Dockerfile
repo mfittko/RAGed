@@ -6,13 +6,12 @@ COPY src ./src
 RUN npm run build
 
 FROM node:20-alpine
-RUN addgroup --gid 1000 app && adduser --uid 1000 --ingroup app --disabled-password app
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-RUN chown -R app:app /app
-USER app
+RUN chown -R node:node /app
+USER node
 EXPOSE 8080
 CMD ["node", "dist/index.js"]
