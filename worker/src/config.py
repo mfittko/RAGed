@@ -14,4 +14,3 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 WORKER_CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "4"))
 MAX_RETRIES = 3
 QUEUE_NAME = "enrichment"
-

@@ -235,4 +235,3 @@ async def aggregate_chunks(document_id: str, total_chunks: int) -> str:
 
     # Filter out empty chunks and join
     return "\n\n".join(text for text in texts if text)
-

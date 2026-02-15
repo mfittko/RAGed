@@ -88,7 +88,7 @@ async def worker_loop() -> None:
     # Create fixed number of worker tasks for concurrency control
     # Each worker processes one task at a time from the queue
     workers = [asyncio.create_task(worker_task()) for _ in range(WORKER_CONCURRENCY)]
-    
+
     # Add watchdog task for stale lease recovery
     watchdog = asyncio.create_task(watchdog_task())
 
