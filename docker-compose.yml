@@ -77,10 +77,10 @@ services:
     build: ./worker
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://rag:rag@postgres:5432/ragstack}"
-      REDIS_URL: "redis://redis:6379"
-      QDRANT_URL: "http://qdrant:6333"
-      NEO4J_URL: "bolt://neo4j:7687"
-      NEO4J_USER: "neo4j"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      QDRANT_URL: "${QDRANT_URL:-http://qdrant:6333}"
+      NEO4J_URL: "${NEO4J_URL:-bolt://neo4j:7687}"
+      NEO4J_USER: "${NEO4J_USER:-neo4j}"
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-}"
       OLLAMA_URL: "http://ollama:11434"
       EXTRACTOR_PROVIDER: "ollama"
@@ -106,10 +106,10 @@ services:
       context: ./api
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://rag:rag@postgres:5432/ragstack}"
-      QDRANT_URL: "http://qdrant:6333"
-      QDRANT_COLLECTION: "docs"
-      VECTOR_SIZE: "768"
-      DISTANCE: "Cosine"
+      QDRANT_URL: "${QDRANT_URL:-http://qdrant:6333}"
+      QDRANT_COLLECTION: "${QDRANT_COLLECTION:-docs}"
+      VECTOR_SIZE: "${VECTOR_SIZE:-768}"
+      DISTANCE: "${DISTANCE:-Cosine}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       OLLAMA_URL: "http://ollama:11434"
       EMBED_MODEL: "nomic-embed-text"
