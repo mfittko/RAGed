@@ -5,6 +5,7 @@
 Replace Qdrant (vector DB), Neo4j (graph DB), and Redis (task queue) with a single Postgres instance using pgvector. MinIO provides optional S3-compatible blob storage for large files.
 
 This is a clean break — old storage code is deleted, not abstracted behind adapters.
+Existing Qdrant/Neo4j/Redis data is not migrated in-place; this plan assumes re-indexing into Postgres from source repositories.
 
 ## System context
 
@@ -77,12 +78,13 @@ BLOB_STORE_BUCKET=rag-raw
 ```sql
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Documents (new first-class concept, currently implicit via baseId)
 CREATE TABLE documents (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source        TEXT NOT NULL,
+    item_url      TEXT,
     doc_type      TEXT,
     collection    TEXT NOT NULL DEFAULT 'docs',
     repo_id       TEXT,
@@ -90,16 +92,22 @@ CREATE TABLE documents (
     path          TEXT,
     lang          TEXT,
     title         TEXT,
+    summary       TEXT,
     raw_key       TEXT,
     raw_bytes     BIGINT,
     mime_type     TEXT,
     created_at    TIMESTAMPTZ DEFAULT now(),
-    updated_at    TIMESTAMPTZ DEFAULT now()
+    updated_at    TIMESTAMPTZ DEFAULT now(),
+    ingested_at   TIMESTAMPTZ DEFAULT now(),
+    last_seen     TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX idx_documents_source ON documents (source);
 CREATE INDEX idx_documents_collection ON documents (collection);
 CREATE INDEX idx_documents_repo_id ON documents (repo_id);
+CREATE INDEX idx_documents_doc_type ON documents (doc_type);
+CREATE INDEX idx_documents_path ON documents (path);
+CREATE INDEX idx_documents_lang ON documents (lang);
 
 -- Chunks (replaces Qdrant points)
 CREATE TABLE chunks (
@@ -107,6 +115,8 @@ CREATE TABLE chunks (
     document_id         UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     chunk_index         INT NOT NULL,
     text                TEXT NOT NULL,
+    -- 768 matches the default embedding model in this project (nomic-embed-text).
+    -- If model dimension changes, alter this column and rebuild vector indexes.
     embedding           vector(768),
     enrichment_status   TEXT NOT NULL DEFAULT 'none'
                         CHECK (enrichment_status IN ('none','pending','processing','enriched','failed')),
@@ -180,7 +190,7 @@ CREATE INDEX idx_task_queue_dequeue
 
 | Current | Postgres |
 |---------|----------|
-| `qdrant.upsert(points)` | `INSERT INTO chunks ... ON CONFLICT DO UPDATE` |
+| `qdrant.upsert(points)` | `INSERT INTO chunks ... ON CONFLICT (document_id, chunk_index) DO UPDATE` |
 | `qdrant.search(vector, limit, filter)` | `SELECT ... ORDER BY embedding <=> $1 LIMIT $n` |
 | `qdrant.scroll(filter)` | `SELECT ... WHERE ... LIMIT $n OFFSET $o` |
 | `qdrant.set_payload()` | `UPDATE chunks SET tier2_meta = $1 WHERE id = $2` |
@@ -251,8 +261,8 @@ RETURNING *;
 
 | Component | Remove | Add |
 |-----------|--------|-----|
-| API (npm) | `@qdrant/js-client-rest`, `redis`, `neo4j-driver` | `pg`, `pgvector` |
-| Worker (pip) | `qdrant-client`, `redis`, `neo4j` | `asyncpg`, `pgvector` |
+| API (npm) | `@qdrant/js-client-rest`, `redis`, `neo4j-driver` | `pg`, `pgvector` (Node adapter package) |
+| Worker (pip) | `qdrant-client`, `redis`, `neo4j` | `asyncpg`, `pgvector` (PyPI package) |
 
 ### Affected GitHub issues
 
