@@ -24,16 +24,19 @@ describe("logger", () => {
 
     console.log = (...args: unknown[]) => {
       logCalls.push(...args.map((arg) => 
+        arg === null ? String(arg) :
         typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
       ));
     };
     console.warn = (...args: unknown[]) => {
       warnCalls.push(...args.map((arg) => 
+        arg === null ? String(arg) :
         typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
       ));
     };
     console.error = (...args: unknown[]) => {
       errorCalls.push(...args.map((arg) => 
+        arg === null ? String(arg) :
         typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
       ));
     };

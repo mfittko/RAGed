@@ -100,8 +100,12 @@ export async function readFileContent(
       if (meta.exif) {
         metadata.exif = meta.exif;
       }
-    } catch (e) {
-      // Silently fail metadata extraction
+    } catch (error: unknown) {
+      // Log debug message for metadata extraction failures
+      const message = error instanceof Error ? error.message : String(error);
+      if (typeof console !== "undefined" && typeof console.debug === "function") {
+        console.debug(`Failed to extract image metadata for "${filePath}": ${message}`);
+      }
     }
     
     return { text: base64, metadata };

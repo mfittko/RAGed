@@ -19,4 +19,22 @@ describe("index command", () => {
     expect(exitCode).toBe(2);
     process.exit = exitSpy;
   });
+
+  it("should validate repo URL is provided", async () => {
+    const exitSpy = process.exit;
+    let exitCode = 0;
+    process.exit = ((code: number) => {
+      exitCode = code;
+      throw new Error("exit");
+    }) as never;
+
+    try {
+      await cmdIndex({ repo: "" });
+    } catch (e) {
+      // Expected to throw
+    }
+
+    expect(exitCode).toBe(2);
+    process.exit = exitSpy;
+  });
 });

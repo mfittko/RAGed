@@ -36,6 +36,10 @@ class Logger {
     }
   }
 
+  /**
+   * Log an error message. Errors are always displayed regardless of quiet mode
+   * to ensure critical issues are not silently ignored.
+   */
   error(message: string, error?: unknown): void {
     if (this.options.json) {
       const errorData = error instanceof Error ? { error: error.message, stack: error.stack } : { error };

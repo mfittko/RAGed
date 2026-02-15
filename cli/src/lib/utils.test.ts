@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs/promises";
 import {
   normalizePathForId,
   detectDocType,
@@ -6,6 +7,8 @@ import {
   isTextLike,
   matchPrefix,
   qdrantFilter,
+  readFileContent,
+  listFiles,
   SUPPORTED_INGEST_EXTS,
   LARGE_IMAGE_THRESHOLD_BYTES,
   DEFAULT_MAX_FILES,
@@ -198,12 +201,10 @@ describe("utils", () => {
 
   describe("readFileContent", () => {
     it("should read text files", async () => {
-      const fs = await import("node:fs/promises");
-      const path = await import("node:path");
       const tmpFile = "/tmp/test-text-file.txt";
       await fs.writeFile(tmpFile, "Test content");
       
-      const result = await import("./utils.js").then(m => m.readFileContent(tmpFile, "text"));
+      const result = await readFileContent(tmpFile, "text");
       expect(result.text).toBe("Test content");
       expect(result.metadata).toBeUndefined();
       
@@ -211,11 +212,10 @@ describe("utils", () => {
     });
 
     it("should read code files", async () => {
-      const fs = await import("node:fs/promises");
       const tmpFile = "/tmp/test-code-file.js";
       await fs.writeFile(tmpFile, "const x = 1;");
       
-      const result = await import("./utils.js").then(m => m.readFileContent(tmpFile, "code"));
+      const result = await readFileContent(tmpFile, "code");
       expect(result.text).toBe("const x = 1;");
       
       await fs.unlink(tmpFile);
@@ -224,13 +224,12 @@ describe("utils", () => {
 
   describe("listFiles", () => {
     it("should list files in directory", async () => {
-      const fs = await import("node:fs/promises");
       const tmpDir = "/tmp/test-list-files";
       await fs.mkdir(tmpDir, { recursive: true });
       await fs.writeFile(`${tmpDir}/file1.txt`, "content1");
       await fs.writeFile(`${tmpDir}/file2.txt`, "content2");
       
-      const result = await import("./utils.js").then(m => m.listFiles(tmpDir));
+      const result = await listFiles(tmpDir);
       expect(result.length).toBe(2);
       expect(result.some(f => f.includes("file1.txt"))).toBe(true);
       expect(result.some(f => f.includes("file2.txt"))).toBe(true);
@@ -239,21 +238,19 @@ describe("utils", () => {
     });
 
     it("should respect maxFiles limit", async () => {
-      const fs = await import("node:fs/promises");
       const tmpDir = "/tmp/test-list-files-max";
       await fs.mkdir(tmpDir, { recursive: true });
       await fs.writeFile(`${tmpDir}/file1.txt`, "content1");
       await fs.writeFile(`${tmpDir}/file2.txt`, "content2");
       await fs.writeFile(`${tmpDir}/file3.txt`, "content3");
       
-      const result = await import("./utils.js").then(m => m.listFiles(tmpDir, 2));
+      const result = await listFiles(tmpDir, 2);
       expect(result.length).toBe(2);
       
       await fs.rm(tmpDir, { recursive: true });
     });
 
     it("should ignore common directories", async () => {
-      const fs = await import("node:fs/promises");
       const tmpDir = "/tmp/test-list-files-ignore";
       await fs.mkdir(tmpDir, { recursive: true });
       await fs.mkdir(`${tmpDir}/node_modules`, { recursive: true });
@@ -261,7 +258,7 @@ describe("utils", () => {
       await fs.writeFile(`${tmpDir}/file1.txt`, "content1");
       await fs.writeFile(`${tmpDir}/node_modules/file2.txt`, "content2");
       
-      const result = await import("./utils.js").then(m => m.listFiles(tmpDir));
+      const result = await listFiles(tmpDir);
       expect(result.length).toBe(1);
       expect(result[0]).toContain("file1.txt");
       
@@ -269,13 +266,12 @@ describe("utils", () => {
     });
 
     it("should traverse subdirectories", async () => {
-      const fs = await import("node:fs/promises");
       const tmpDir = "/tmp/test-list-files-subdir";
       await fs.mkdir(`${tmpDir}/subdir`, { recursive: true });
       await fs.writeFile(`${tmpDir}/file1.txt`, "content1");
       await fs.writeFile(`${tmpDir}/subdir/file2.txt`, "content2");
       
-      const result = await import("./utils.js").then(m => m.listFiles(tmpDir));
+      const result = await listFiles(tmpDir);
       expect(result.length).toBe(2);
       
       await fs.rm(tmpDir, { recursive: true });
