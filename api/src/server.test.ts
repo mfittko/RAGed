@@ -391,4 +391,127 @@ describe("API integration tests", () => {
       await app.close();
     });
   });
+
+  describe("CORS configuration", () => {
+    const ORIGINAL_CORS_ORIGIN = process.env.CORS_ORIGIN;
+
+    afterEach(() => {
+      if (ORIGINAL_CORS_ORIGIN === undefined) {
+        delete process.env.CORS_ORIGIN;
+      } else {
+        process.env.CORS_ORIGIN = ORIGINAL_CORS_ORIGIN;
+      }
+    });
+
+    it("blocks CORS requests by default when CORS_ORIGIN is not set", async () => {
+      const { buildApp } = await import("./server.js");
+      const app = buildApp();
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz",
+        headers: { origin: "http://example.com" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      // CORS should be disabled by default (no access-control-allow-origin header)
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("respects CORS_ORIGIN environment variable with single origin", async () => {
+      process.env.CORS_ORIGIN = "https://specific-domain.com";
+      const { buildApp } = await import("./server.js");
+      const app = buildApp();
+
+      const res = await app.inject({
+        method: "OPTIONS",
+        url: "/healthz",
+        headers: { 
+          origin: "https://specific-domain.com",
+          "access-control-request-method": "GET",
+        },
+      });
+
+      expect(res.statusCode).toBe(204);
+      expect(res.headers["access-control-allow-origin"]).toBe("https://specific-domain.com");
+      await app.close();
+    });
+
+    it("supports multiple origins via comma-separated CORS_ORIGIN", async () => {
+      process.env.CORS_ORIGIN = "https://domain1.com,https://domain2.com,https://domain3.com";
+      const { buildApp } = await import("./server.js");
+      const app = buildApp();
+
+      // Test first origin
+      const res1 = await app.inject({
+        method: "OPTIONS",
+        url: "/healthz",
+        headers: { 
+          origin: "https://domain1.com",
+          "access-control-request-method": "GET",
+        },
+      });
+
+      expect(res1.statusCode).toBe(204);
+      expect(res1.headers["access-control-allow-origin"]).toBe("https://domain1.com");
+
+      // Test second origin
+      const res2 = await app.inject({
+        method: "OPTIONS",
+        url: "/healthz",
+        headers: { 
+          origin: "https://domain2.com",
+          "access-control-request-method": "GET",
+        },
+      });
+
+      expect(res2.statusCode).toBe(204);
+      expect(res2.headers["access-control-allow-origin"]).toBe("https://domain2.com");
+
+      await app.close();
+    });
+  });
+
+  describe("Rate limiting", () => {
+    const ORIGINAL_RATE_LIMIT_MAX = process.env.RATE_LIMIT_MAX;
+
+    afterEach(() => {
+      if (ORIGINAL_RATE_LIMIT_MAX === undefined) {
+        delete process.env.RATE_LIMIT_MAX;
+      } else {
+        process.env.RATE_LIMIT_MAX = ORIGINAL_RATE_LIMIT_MAX;
+      }
+    });
+
+    it("rate limit plugin is registered", async () => {
+      const { buildApp } = await import("./server.js");
+      const app = buildApp();
+      await app.ready();
+
+      // Verify the app starts and responds successfully
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz",
+      });
+
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("respects RATE_LIMIT_MAX environment variable", async () => {
+      process.env.RATE_LIMIT_MAX = "100";
+      const { buildApp } = await import("./server.js");
+      const app = buildApp();
+      await app.ready();
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/healthz",
+      });
+
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+  });
 });

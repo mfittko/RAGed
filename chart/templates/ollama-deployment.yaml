@@ -15,11 +15,22 @@ spec:
         app: {{ .Release.Name }}-ollama
         {{- include "rag.labels" . | nindent 8 }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: ollama
           image: {{ .Values.ollama.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          env:
+            - name: OLLAMA_MODELS
+              value: "/.ollama"
           ports: [{ containerPort: 11434 }]
-          volumeMounts: [{ name: ollama, mountPath: /root/.ollama }]
+          volumeMounts: [{ name: ollama, mountPath: /.ollama }]
       volumes:
         - name: ollama
           persistentVolumeClaim: { claimName: {{ .Release.Name }}-ollama }

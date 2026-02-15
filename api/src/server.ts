@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { ensureCollection, qdrant, collectionName, getPointsByBaseId, scrollPoints, scrollPointsPage, getPointsByIds } from "./qdrant.js";
 import { embed } from "./ollama.js";
 import { registerAuth } from "./auth.js";
@@ -15,11 +17,44 @@ import { isEnrichmentEnabled, getQueueLength, enqueueEnrichment as enqueueTask }
 import { isGraphEnabled, expandEntities, getEntity, getDocumentsByEntityMention } from "./graph-client.js";
 
 export function buildApp() {
-  const app = Fastify({ logger: true });
+  // Trust proxy only when explicitly enabled via env var for security
+  const trustProxy = process.env.TRUST_PROXY === "true";
+  const app = Fastify({ logger: true, trustProxy });
   registerErrorHandler(app);
-  registerAuth(app);
+  
+  // Register CORS with env-configurable origin(s)
+  // Default to false (disabled) for security - must be explicitly configured in production
+  // Supports comma-separated list of origins
+  const rawCorsOrigin = process.env.CORS_ORIGIN;
+  let corsOrigin: string | string[] | boolean = false;
+  if (rawCorsOrigin) {
+    const origins = rawCorsOrigin
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (origins.length === 1) {
+      corsOrigin = origins[0];
+    } else if (origins.length > 1) {
+      corsOrigin = origins;
+    }
+  }
+  app.register(cors, {
+    origin: corsOrigin,
+  });
 
+  // Health check endpoint - registered before rate limiting to avoid rate limit issues
   app.get("/healthz", async () => ({ ok: true }));
+
+  // Register rate limiting with env-configurable max
+  // Validate input to prevent NaN from malformed env values
+  const parsed = parseInt(process.env.RATE_LIMIT_MAX || "100", 10);
+  const rateLimitMax = Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  app.register(rateLimit, {
+    max: rateLimitMax,
+    timeWindow: "1 minute",
+  });
+
+  registerAuth(app);
 
   app.post("/ingest", { 
     schema: ingestSchema,

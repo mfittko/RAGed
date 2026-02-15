@@ -12,5 +12,7 @@ ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+RUN chown -R node:node /app
 RUN ln -s /app/dist/index.js /usr/local/bin/rag-index
+USER node
 ENTRYPOINT ["node", "/app/dist/index.js"]

@@ -15,10 +15,18 @@ spec:
         app: {{ .Release.Name }}-enrichment-worker
         {{- include "rag.labels" . | nindent 8 }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: worker
           image: "{{ .Values.enrichment.worker.image.repository }}:{{ .Values.enrichment.worker.image.tag }}"
           imagePullPolicy: {{ .Values.enrichment.worker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           envFrom:
             - configMapRef: { name: {{ .Release.Name }}-worker-config }
             {{- if or .Values.enrichment.worker.extractor.anthropicApiKey .Values.enrichment.worker.extractor.openaiApiKey }}
@@ -35,7 +43,79 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-neo4j-secret
                   key: NEO4J_AUTH
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os
+                  import socket
+                  import sys
+                  from urllib.parse import urlparse
+
+                  def check_tcp(host, port, timeout=2):
+                      if not host or not port:
+                          # Fail if configuration is missing
+                          return False
+                      try:
+                          port = int(port)
+                          with socket.create_connection((host, port), timeout=timeout):
+                              return True
+                      except Exception:
+                          return False
+
+                  def host_port_from_url(url, default_host, default_port):
+                      if not url:
+                          return default_host, default_port
+                      parsed = urlparse(url)
+                      host = parsed.hostname or default_host
+                      port = parsed.port or default_port
+                      return host, str(port)
+
+                  # Build checks list based on configured services
+                  checks = []
+                  redis_host, redis_port = host_port_from_url(
+                      os.getenv("REDIS_URL"),
+                      "{{ .Release.Name }}-redis",
+                      6379,
+                  )
+                  checks.append(("REDIS", redis_host, redis_port))
+
+                  # Neo4j is optional - only check when explicitly enabled
+                  {{- if .Values.neo4j.enabled }}
+                  neo4j_host, neo4j_port = host_port_from_url(
+                      os.getenv("NEO4J_URL"),
+                      "{{ .Release.Name }}-neo4j",
+                      7687,
+                  )
+                  checks.append(("NEO4J", neo4j_host, neo4j_port))
+                  {{- end }}
+
+                  # Qdrant is required
+                  qdrant_host, qdrant_port = host_port_from_url(
+                      os.getenv("QDRANT_URL"),
+                      "{{ .Release.Name }}-qdrant",
+                      6333,
+                  )
+                  checks.append(("QDRANT", qdrant_host, qdrant_port))
+
+                  healthy = True
+                  for name, host, port in checks:
+                      if not check_tcp(host, port):
+                          healthy = False
+
+                  sys.exit(0 if healthy else 1)
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+            periodSeconds: 30
           {{- if .Values.enrichment.worker.resources }}
           resources: {{- toYaml .Values.enrichment.worker.resources | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}

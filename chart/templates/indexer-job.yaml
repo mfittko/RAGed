@@ -16,10 +16,18 @@ spec:
         {{- include "rag.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: indexer
           image: "{{ .Values.indexer.image.repository }}:{{ .Values.indexer.image.tag }}"
           imagePullPolicy: {{ .Values.indexer.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           args:
             - "index"
             - "--repo"
@@ -39,6 +47,12 @@ spec:
           env:
             - name: RAG_API_TOKEN
               value: "{{ default .Values.api.auth.token .Values.indexer.token }}"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.indexer.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}
