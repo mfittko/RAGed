@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "rag.labels" . | nindent 4 }}
 data:
+  # Legacy env vars for backward compatibility (worker not yet migrated to Postgres)
+  # Point to non-existent services - will fail at runtime until worker is updated
+  REDIS_URL: "redis://localhost:6379"
+  QDRANT_URL: "http://localhost:6333"
+  NEO4J_URL: "bolt://localhost:7687"
+  NEO4J_USER: "neo4j"
   OLLAMA_URL: "http://{{ .Release.Name }}-ollama:{{ .Values.ollama.service.port }}"
   EXTRACTOR_PROVIDER: "{{ .Values.enrichment.worker.extractor.provider }}"
   EXTRACTOR_MODEL_FAST: "{{ .Values.enrichment.worker.extractor.modelFast }}"

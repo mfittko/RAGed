@@ -63,7 +63,21 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+          # Liveness: process-level health only (no external dependencies)
           livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import sys
+                  # Simple check: can we import and run Python? Process is alive.
+                  sys.exit(0)
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+            periodSeconds: 30
+          # Readiness: external dependency health (Postgres)
+          readinessProbe:
             exec:
               command:
                 - python
@@ -92,18 +106,18 @@ spec:
                       port = parsed.port or default_port
                       return host, str(port)
 
-                  # Check Postgres connection (required)
+                  # Check Postgres connection (required for worker to function)
                   db_host, db_port = host_port_from_url(
                       os.getenv("DATABASE_URL"),
                       "{{ .Release.Name }}-postgres",
                       5432,
                   )
 
-                  healthy = check_tcp(db_host, db_port)
-                  sys.exit(0 if healthy else 1)
-            initialDelaySeconds: 30
-            timeoutSeconds: 10
-            periodSeconds: 30
+                  ready = check_tcp(db_host, db_port)
+                  sys.exit(0 if ready else 1)
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 10
           {{- if .Values.enrichment.worker.resources }}
           resources: {{- toYaml .Values.enrichment.worker.resources | nindent 12 }}
           {{- end }}

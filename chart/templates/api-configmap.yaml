@@ -5,6 +5,12 @@ metadata:
   labels:
     {{- include "rag.labels" . | nindent 4 }}
 data:
+  # Legacy env vars for backward compatibility (API not yet migrated to Postgres)
+  # Point to non-existent services - will fail at runtime until API is updated
+  QDRANT_URL: "http://localhost:6333"
+  QDRANT_COLLECTION: "{{ .Values.api.env.QDRANT_COLLECTION }}"
+  VECTOR_SIZE: "{{ .Values.api.env.VECTOR_SIZE }}"
+  DISTANCE: "{{ .Values.api.env.DISTANCE }}"
   OLLAMA_URL: "http://{{ .Release.Name }}-ollama:{{ .Values.ollama.service.port }}"
   EMBED_MODEL: "{{ .Values.api.env.EMBED_MODEL }}"
   PORT: "8080"
@@ -14,5 +20,7 @@ data:
   RATE_LIMIT_MAX: "{{ .Values.api.env.RATE_LIMIT_MAX }}"
   TRUST_PROXY: "{{ .Values.api.env.TRUST_PROXY }}"
   {{- if .Values.enrichment.enabled }}
+  # Legacy Redis URL for backward compatibility (worker not yet migrated)
+  REDIS_URL: "redis://localhost:6379"
   ENRICHMENT_ENABLED: "true"
   {{- end }}
