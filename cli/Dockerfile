@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM node:20-alpine
 RUN apk add --no-cache git openssh-client ca-certificates
-RUN addgroup --system app && adduser --system --ingroup app app
+RUN addgroup --gid 1000 app && adduser --uid 1000 --ingroup app --disabled-password app
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json
