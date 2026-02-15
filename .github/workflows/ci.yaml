@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [build, test, lint, worker-ci]
+    needs: [build, test, lint]
     strategy:
       matrix:
         include:
