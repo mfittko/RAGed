@@ -75,7 +75,7 @@ describe("ingest integration tests", () => {
   beforeEach(() => {
     // Reset all mocks before each test
     vi.clearAllMocks();
-    // Clear RAG_API_TOKEN to avoid 401 errors in tests
+    // Clear RAG_API_TOKEN to run tests without authentication
     delete process.env.RAG_API_TOKEN;
   });
 

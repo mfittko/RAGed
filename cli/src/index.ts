@@ -174,7 +174,7 @@ function authHeaders(token?: string): Record<string, string> {
 async function ingest(api: string, collection: string, items: IngestItem[], token?: string, enrich?: boolean) {
   const body: { collection: string; items: IngestItem[]; enrich?: boolean } = { collection, items };
   if (enrich !== undefined) body.enrich = enrich;
-  
+
   const res = await fetch(`${api.replace(/\/$/, "")}/ingest`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeaders(token) },
