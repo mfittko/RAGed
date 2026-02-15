@@ -25,6 +25,11 @@ export function buildApp() {
     preValidation: async (req, reply) => {
       const body = req.body as IngestRequest;
       
+      // Check that items exists (schema validation should catch this, but be defensive)
+      if (!body.items || !Array.isArray(body.items)) {
+        return;
+      }
+      
       // Validate each item: must have either text or url (or both)
       let urlCount = 0;
       for (const item of body.items) {
