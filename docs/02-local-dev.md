@@ -226,6 +226,6 @@ node dist/index.js ingest --url https://example.com/whitepaper.pdf --api http://
 **SSRF Protection:**
 URL ingestion includes automatic security protections:
 - Blocks private IP ranges (10.x.x.x, 192.168.x.x, 127.x.x.x, etc.)
-- DNS rebinding defense
-- Configurable timeouts
+- DNS rebinding defense: resolves hostname before request and rejects private IPs
+- Fixed 30-second request timeout
 - Rejects non-HTTP/HTTPS schemes

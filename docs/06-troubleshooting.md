@@ -249,7 +249,7 @@ curl -s -X POST http://localhost:8080/ingest \
 #   "errors": [{
 #     "url": "https://example.com/article",
 #     "status": 404,
-#     "reason": "fetch_failed: Not Found"
+#     "reason": "fetch_failed"
 #   }]
 # }
 ```
@@ -258,11 +258,12 @@ curl -s -X POST http://localhost:8080/ingest \
 
 | Reason | Cause | Fix |
 |--------|-------|-----|
-| `ssrf_blocked: private IP` | URL resolves to private IP (10.x.x.x, 192.168.x.x, 127.x.x.x) | Use publicly accessible URLs only |
-| `ssrf_blocked: DNS rebinding` | Hostname resolution changed after initial check | Ensure stable DNS resolution |
-| `fetch_failed: timeout` | URL took too long to respond | Check network connectivity, try smaller content |
-| `fetch_failed: 404` / `403` / `500` | HTTP error from target server | Verify URL is accessible, check server logs |
-| `unsupported_content_type: image/png` | Content type not supported for extraction | Only HTML, PDF, text, markdown, JSON are supported |
+| `ssrf_blocked` | URL resolves to private IP (10.x.x.x, 192.168.x.x, 127.x.x.x, loopback, link-local) | Use publicly accessible URLs only |
+| `timeout` | URL took too long to respond (>30s) | Check network connectivity, try smaller content |
+| `fetch_failed` | HTTP error from target server (see `status` field for HTTP code) | Verify URL is accessible, check server logs |
+| `too_large` | Response body exceeds 10MB limit | Content is too large for ingestion |
+| `redirect_limit` | Too many redirects (>5) | Check URL for redirect loops |
+| `unsupported_content_type: <type>` | Content type not supported for extraction | Only HTML, PDF, text, markdown, JSON are supported |
 
 **Test URL accessibility manually:**
 ```bash
@@ -281,7 +282,7 @@ dig +short internal-hostname.local
 - Blocks RFC 1918 private ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - Blocks loopback: `127.0.0.0/8`, `::1`
 - Blocks link-local: `169.254.0.0/16`, `fe80::/10`
-- DNS rebinding defense: re-resolves after connection to detect IP changes
+- DNS rebinding defense: resolves hostname before the request and rejects DNS results pointing to private, loopback, or link-local IPs
 - Only HTTP/HTTPS schemes allowed
 
 ## Unsupported Content Type

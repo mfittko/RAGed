@@ -76,7 +76,7 @@ Chunk, embed, and store text items or fetch content from URLs in a Qdrant collec
 
 \* Either `text` or `url` must be provided. If `url` is provided without `text`, the API fetches and extracts content server-side.
 
-\*\* `source` is required if `text` is provided without `url`. If `url` is provided, `source` defaults to the resolved URL.
+\*\* `source` is required if `text` is provided without `url`. If `url` is provided, `source` defaults to a normalized form of the resolved URL: the `origin` and `pathname` of the final URL after redirects (query string and fragment are not included).
 
 **Response (success):**
 ```json
@@ -97,7 +97,7 @@ Chunk, embed, and store text items or fetch content from URLs in a Qdrant collec
     {
       "url": "https://example.com/private",
       "status": null,
-      "reason": "ssrf_blocked: private IP"
+      "reason": "ssrf_blocked"
     }
   ]
 }
@@ -128,6 +128,7 @@ Chunk, embed, and store text items or fetch content from URLs in a Qdrant collec
 - Supports HTML (Readability extraction), PDF (pdf-parse), plain text, markdown, JSON
 - SSRF protection blocks private IPs, DNS rebinding attacks
 - Partial success: successfully fetched items are ingested, failures returned in `errors`
+- Maximum of 50 items with a `url` field per request; requests with more than 50 URLs are rejected with HTTP 400
 - Fetch metadata (resolvedUrl, contentType, fetchStatus) added to chunk payloads
 
 ---

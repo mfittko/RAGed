@@ -127,9 +127,9 @@ sequenceDiagram
 
 **SSRF Protection:**
 - Blocks private IP ranges (RFC 1918, loopback, link-local)
-- DNS rebinding defense: re-resolves hostname after connection
+- DNS rebinding defense: resolves hostname before request and rejects private IPs
 - Rejects non-HTTP/HTTPS schemes
-- User-configurable timeouts
+- Fixed 30-second request timeout
 
 **Supported Content Types:**
 - `text/html` — Readability article extraction (jsdom + @mozilla/readability)
