@@ -75,8 +75,8 @@ graph TD
 
 ```bash
 # API
-docker build -t your-registry/rag-api:0.5.0 ./api
-docker push your-registry/rag-api:0.5.0
+docker build -t your-registry/raged-api:0.5.0 ./api
+docker push your-registry/raged-api:0.5.0
 
 # CLI (for in-cluster indexing)
 docker build -t your-registry/raged:0.5.0 ./cli
@@ -89,10 +89,10 @@ docker push your-registry/raged:0.5.0
 
 ```bash
 helm install rag ./chart -n rag --create-namespace \
-  --set api.image.repository=your-registry/rag-api \
+  --set api.image.repository=your-registry/raged-api \
   --set api.image.tag=0.5.0 \
   --set api.ingress.enabled=true \
-  --set api.ingress.host=rag.example.com \
+  --set api.ingress.host=raged.example.com \
   --set api.auth.enabled=true \
   --set api.auth.token=REPLACE_ME
 ```
@@ -101,19 +101,19 @@ helm install rag ./chart -n rag --create-namespace \
 
 ```bash
 # Build and push worker image
-docker build -t your-registry/rag-worker:0.5.0 ./worker
-docker push your-registry/rag-worker:0.5.0
+docker build -t your-registry/raged-worker:0.5.0 ./worker
+docker push your-registry/raged-worker:0.5.0
 
 # Install with enrichment enabled
 helm install rag ./chart -n rag --create-namespace \
-  --set api.image.repository=your-registry/rag-api \
+  --set api.image.repository=your-registry/raged-api \
   --set api.image.tag=0.5.0 \
   --set api.ingress.enabled=true \
-  --set api.ingress.host=rag.example.com \
+  --set api.ingress.host=raged.example.com \
   --set api.auth.enabled=true \
   --set api.auth.token=REPLACE_ME \
   --set enrichment.enabled=true \
-  --set enrichment.worker.image.repository=your-registry/rag-worker \
+  --set enrichment.worker.image.repository=your-registry/raged-worker \
   --set enrichment.worker.image.tag=0.5.0 \
   --set neo4j.auth.password=REPLACE_NEO4J_PASSWORD
 ```
@@ -126,7 +126,7 @@ helm install rag ./chart -n rag --create-namespace \
 |-------|---------|-------------|
 | `api.replicas` | `2` | Number of API pods |
 | `api.ingress.enabled` | `false` | Enable Ingress |
-| `api.ingress.host` | `rag.local` | Ingress hostname |
+| `api.ingress.host` | `raged.local` | Ingress hostname |
 | `api.ingress.tls.enabled` | `false` | Enable TLS |
 | `api.auth.enabled` | `true` | Enable bearer token auth |
 | `api.auth.token` | `""` | Auth token (set this!) |
@@ -167,9 +167,9 @@ helm upgrade rag ./chart -n rag \
 ```bash
 helm install rag ./chart -n rag --create-namespace \
   --set api.ingress.enabled=true \
-  --set api.ingress.host=rag.example.com \
+  --set api.ingress.host=raged.example.com \
   --set api.ingress.tls.enabled=true \
-  --set api.ingress.tls.secretName=rag-tls
+  --set api.ingress.tls.secretName=raged-tls
 ```
 
 Ensure a TLS certificate Secret exists in the `rag` namespace, or use cert-manager to provision one automatically.

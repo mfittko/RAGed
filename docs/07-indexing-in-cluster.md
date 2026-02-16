@@ -26,7 +26,7 @@ sequenceDiagram
 
 ```bash
 helm upgrade --install rag ./chart -n rag --create-namespace \
-  --set api.image.repository=your-registry/rag-api \
+  --set api.image.repository=your-registry/raged-api \
   --set api.image.tag=0.5.0 \
   --set api.auth.enabled=true \
   --set api.auth.token=REPLACE_ME \
