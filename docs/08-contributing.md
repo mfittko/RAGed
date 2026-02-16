@@ -80,7 +80,7 @@ Keep the first line under 72 characters. Add a body for complex changes.
 ## CI Pipeline Layout
 
 The CI workflow is in `.github/workflows/ci.yaml`.
-Use Actions → Run workflow to manually trigger `.github/workflows/changelog-generator.yml` and `.github/workflows/pages.yml` when needed.
+Use Actions → Run workflow to manually trigger `.github/workflows/pages.yml` when needed.
 
 - Node quality jobs use matrices for `api` and `cli` (`build`, `lint`)
 - Worker quality jobs use the `worker-ci` matrix (`test`, `lint`)
