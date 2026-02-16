@@ -5,14 +5,16 @@ import { extractTier1 } from "../extractors/index.js";
 import type { EnrichmentTask } from "../types.js";
 import { fetchUrls } from "./url-fetch.js";
 import { extractContentAsync } from "./url-extract.js";
-import { query } from "../db.js";
+import { getPool } from "../db.js";
+import { deriveIdentityKey, formatVector } from "../pg-helpers.js";
+import { embed as embedTexts } from "../ollama.js";
 
 // Enrichment functions using Postgres task_queue
 function isEnrichmentEnabled(): boolean {
   return process.env.ENRICHMENT_ENABLED === "true";
 }
 
-async function enqueueEnrichmentBatch(tasks: EnrichmentTask[]): Promise<void> {
+async function enqueueEnrichmentBatch(tasks: EnrichmentTask[], client: any): Promise<void> {
   if (!isEnrichmentEnabled() || tasks.length === 0) {
     return;
   }
@@ -28,7 +30,7 @@ async function enqueueEnrichmentBatch(tasks: EnrichmentTask[]): Promise<void> {
     values.push("enrichment", "pending", JSON.stringify(task), now);
   }
 
-  await query(
+  await client.query(
     `INSERT INTO task_queue (queue, status, payload, run_after)
      VALUES ${rowsSql.join(", ")}`,
     values
@@ -58,19 +60,6 @@ export interface IngestResult {
 
 export { type IngestItem };
 
-export interface QdrantPoint {
-  id: string;
-  vector: number[];
-  payload: Record<string, unknown>;
-}
-
-export interface IngestDeps {
-  embed: (texts: string[]) => Promise<number[][]>;
-  ensureCollection: (name: string) => Promise<void>;
-  upsert: (collection: string, points: QdrantPoint[]) => Promise<void>;
-  collectionName: (name?: string) => string;
-}
-
 function toSourceFromUrl(rawUrl: string): string {
   try {
     const urlObj = new URL(rawUrl);
@@ -81,12 +70,15 @@ function toSourceFromUrl(rawUrl: string): string {
   }
 }
 
+/**
+ * Ingest documents and chunks into Postgres
+ * All writes happen in a transaction for consistency
+ */
 export async function ingest(
   request: IngestRequest,
-  deps: IngestDeps,
+  collection?: string,
 ): Promise<IngestResult> {
-  const col = deps.collectionName(request.collection);
-  await deps.ensureCollection(col);
+  const col = collection || "docs";
 
   const shouldEnrich =
     request.enrich !== false && isEnrichmentEnabled();
@@ -203,6 +195,7 @@ export async function ingest(
     tier1Meta: Record<string, unknown>;
     chunks: string[];
     source: string;
+    itemUrl?: string;
     metadata?: Record<string, unknown>;
   }
   
@@ -236,9 +229,6 @@ export async function ingest(
     const metadata: Record<string, unknown> = {
       ...(item.metadata ?? {}),
     };
-    if (item.url) {
-      metadata.itemUrl = item.url;
-    }
 
     processedItems.push({
       baseId: item.id ?? randomUUID(),
@@ -246,83 +236,157 @@ export async function ingest(
       tier1Meta: extractTier1(item, docType),
       chunks: chunkText(item.text),
       source: item.source,
+      itemUrl: item.url,
       metadata,
     });
   }
   
   let totalUpserted = 0;
+  const enrichmentTasks: EnrichmentTask[] = [];
+  const docTypeCounts: Record<string, number> = {};
 
-  // Embed and upsert in batches
-  for (const procItem of processedItems) {
-    for (let batchStart = 0; batchStart < procItem.chunks.length; batchStart += EMBED_BATCH_SIZE) {
-      const batchEnd = Math.min(batchStart + EMBED_BATCH_SIZE, procItem.chunks.length);
-      const batchChunks = procItem.chunks.slice(batchStart, batchEnd);
-      const batchVectors = await deps.embed(batchChunks);
+  // Upsert documents and chunks in transactions
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    for (const procItem of processedItems) {
+      try {
+        const chunkBatches: Array<{ batchStart: number; chunks: string[]; vectors: number[][] }> = [];
+        for (let batchStart = 0; batchStart < procItem.chunks.length; batchStart += EMBED_BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + EMBED_BATCH_SIZE, procItem.chunks.length);
+          const batchChunks = procItem.chunks.slice(batchStart, batchEnd);
+          const batchVectors = await embedTexts(batchChunks);
+          chunkBatches.push({ batchStart, chunks: batchChunks, vectors: batchVectors });
+        }
 
-      const batchPoints: QdrantPoint[] = [];
-      for (let i = 0; i < batchChunks.length; i++) {
-        const chunkIndex = batchStart + i;
-        batchPoints.push({
-          id: `${procItem.baseId}:${chunkIndex}`,
-          vector: batchVectors[i],
-          payload: {
-            ...(procItem.metadata ?? {}),
-            text: batchChunks[i],
-            source: procItem.source,
-            chunkIndex,
-            baseId: procItem.baseId,
-            docType: procItem.docType,
-            ingestedAt: now,
-            enrichmentStatus: shouldEnrich ? "pending" : "none",
-            tier1Meta: procItem.tier1Meta,
-          },
-        });
+        await client.query("BEGIN");
+
+        const identityKey = deriveIdentityKey(procItem.source);
+        
+        // Upsert document
+        const docResult = await client.query<{ id: string; base_id: string }>(
+          `INSERT INTO documents (
+            base_id, identity_key, source, item_url, doc_type, collection, metadata, ingested_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (collection, identity_key) 
+          DO UPDATE SET
+            base_id = documents.base_id,
+            item_url = EXCLUDED.item_url,
+            doc_type = EXCLUDED.doc_type,
+            metadata = EXCLUDED.metadata,
+            last_seen = now()
+          RETURNING id, base_id`,
+          [
+            procItem.baseId,
+            identityKey,
+            procItem.source,
+            procItem.itemUrl || null,
+            procItem.docType,
+            col,
+            JSON.stringify(procItem.metadata || {}),
+            now,
+          ]
+        );
+
+        const documentId = docResult.rows[0].id;
+        const persistedBaseId = docResult.rows[0].base_id;
+
+        // Upsert embedded chunks in batches
+        for (const batch of chunkBatches) {
+          const { batchStart, chunks: batchChunks, vectors: batchVectors } = batch;
+
+          // Upsert chunks
+          const chunkValues: unknown[] = [];
+          const chunkRows: string[] = [];
+          
+          // 6 parameters per row for the chunks INSERT query: document_id, chunk_index, text, embedding, enrichment_status, tier1_meta
+          const PARAMS_PER_CHUNK = 6;
+          
+          for (let i = 0; i < batchChunks.length; i++) {
+            const chunkIndex = batchStart + i;
+            const base = i * PARAMS_PER_CHUNK;
+            chunkRows.push(
+              `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}::vector, $${base + 5}, $${base + 6})`
+            );
+            chunkValues.push(
+              documentId,
+              chunkIndex,
+              batchChunks[i],
+              formatVector(batchVectors[i]),
+              shouldEnrich ? "pending" : "none",
+              JSON.stringify(procItem.tier1Meta)
+            );
+          }
+
+          await client.query(
+            `INSERT INTO chunks (
+              document_id, chunk_index, text, embedding, enrichment_status, tier1_meta
+            ) VALUES ${chunkRows.join(", ")}
+            ON CONFLICT (document_id, chunk_index)
+            DO UPDATE SET
+              text = EXCLUDED.text,
+              embedding = EXCLUDED.embedding,
+              enrichment_status = EXCLUDED.enrichment_status,
+              tier1_meta = EXCLUDED.tier1_meta`,
+            chunkValues
+          );
+
+          totalUpserted += batchChunks.length;
+        }
+
+        // Build enrichment tasks if enabled
+        if (shouldEnrich) {
+          docTypeCounts[procItem.docType] = (docTypeCounts[procItem.docType] || 0) + procItem.chunks.length;
+
+          for (let chunkIndex = 0; chunkIndex < procItem.chunks.length; chunkIndex++) {
+            enrichmentTasks.push({
+              taskId: randomUUID(),
+              chunkId: `${persistedBaseId}:${chunkIndex}`,
+              collection: col,
+              docType: procItem.docType,
+              baseId: persistedBaseId,
+              chunkIndex,
+              totalChunks: procItem.chunks.length,
+              text: procItem.chunks[chunkIndex],
+              source: procItem.source,
+              tier1Meta: procItem.tier1Meta,
+              attempt: 1,
+              enqueuedAt: now,
+            });
+          }
+        }
+
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
       }
-
-      await deps.upsert(col, batchPoints);
-      totalUpserted += batchPoints.length;
     }
+  } finally {
+    client.release();
   }
 
-  // Enqueue enrichment tasks
-  if (shouldEnrich) {
+  // Enqueue enrichment tasks in batches
+  if (shouldEnrich && enrichmentTasks.length > 0) {
     const TASK_BATCH_SIZE = 100;
-    const tasks: EnrichmentTask[] = [];
-    const docTypeCounts: Record<string, number> = {};
-    
-    // Build tasks from processed items
-    for (const procItem of processedItems) {
-      docTypeCounts[procItem.docType] = (docTypeCounts[procItem.docType] || 0) + procItem.chunks.length;
-
-      for (let chunkIndex = 0; chunkIndex < procItem.chunks.length; chunkIndex++) {
-        tasks.push({
-          taskId: randomUUID(),
-          chunkId: `${procItem.baseId}:${chunkIndex}`,
-          collection: col,
-          docType: procItem.docType,
-          baseId: procItem.baseId,
-          chunkIndex,
-          totalChunks: procItem.chunks.length,
-          text: procItem.chunks[chunkIndex],
-          source: procItem.source,
-          tier1Meta: procItem.tier1Meta,
-          attempt: 1,
-          enqueuedAt: now,
-        });
+    const client = await pool.connect();
+    try {
+      for (let i = 0; i < enrichmentTasks.length; i += TASK_BATCH_SIZE) {
+        const batch = enrichmentTasks.slice(i, i + TASK_BATCH_SIZE);
+        await enqueueEnrichmentBatch(batch, client);
       }
-    }
-
-    // Batch enqueue tasks in groups to avoid overwhelming the database
-    for (let i = 0; i < tasks.length; i += TASK_BATCH_SIZE) {
-      const batch = tasks.slice(i, i + TASK_BATCH_SIZE);
-      await enqueueEnrichmentBatch(batch);
+    } catch (error) {
+      // Re-throw the error after ensuring proper cleanup in finally
+      throw error;
+    } finally {
+      client.release();
     }
 
     const result: IngestResult = {
       ok: true,
       upserted: totalUpserted,
       enrichment: {
-        enqueued: tasks.length,
+        enqueued: enrichmentTasks.length,
         docTypes: docTypeCounts,
       },
     };
