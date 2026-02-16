@@ -98,8 +98,8 @@ Docker images are automatically published to GitHub Container Registry (GHCR) vi
 
 **Main Branch Pushes:**
 - Triggered on every push to `main`
-- Creates tags: `main`, `sha-<commit-short-sha>`, and `latest`
-- Example: `ghcr.io/mfittko/raged-api:main`, `ghcr.io/mfittko/raged-api:sha-abc1234`, `ghcr.io/mfittko/raged-api:latest`
+- Creates tags: `main` and `sha-<commit-short-sha>`
+- Example: `ghcr.io/mfittko/raged-api:main`, `ghcr.io/mfittko/raged-api:sha-abc1234`
 
 **Version Tag Pushes:**
 - Triggered on tags matching `v*.*.*` (e.g., `v0.6.0`)
@@ -132,12 +132,12 @@ git push origin v0.6.0
 #    - ghcr.io/mfittko/raged-api:0.6.0
 #    - ghcr.io/mfittko/raged-api:0.6
 #    - ghcr.io/mfittko/raged-api:0
-#    - ghcr.io/mfittko/raged-api:latest (overwriting the main branch latest)
+#    - ghcr.io/mfittko/raged-api:latest
 ```
 
 **Note:** 
 - Git tags use the `v` prefix (e.g., `v0.6.0`), but Docker image tags do not (e.g., `0.6.0`). Always reference images without the `v` prefix in Helm values and deployment configurations.
-- The `latest` tag is updated on both main branch pushes and version tag pushes. The Helm chart defaults to `latest` to always pull the most recent image.
+- The `latest` tag is updated only on version tag pushes. Main branch pushes publish `main` and `sha-*` tags for development builds.
 
 ### Image Features
 

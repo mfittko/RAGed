@@ -42,7 +42,7 @@ helm upgrade --install rag ./chart -n rag --create-namespace \
 |-------|---------|-------------|
 | `indexer.enabled` | `false` | Create the indexer Job |
 | `indexer.image.repository` | `ghcr.io/mfittko/raged` | Indexer image |
-| `indexer.image.tag` | `0.5.0` | Indexer image tag |
+| `indexer.image.tag` | `latest` | Indexer image tag |
 | `indexer.repoUrl` | `""` | Git repository URL to index |
 | `indexer.repoId` | `""` | Stable identifier for the repo |
 | `indexer.branch` | `""` | Branch to clone |
