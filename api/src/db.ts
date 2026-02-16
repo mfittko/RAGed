@@ -5,12 +5,20 @@ import { fileURLToPath } from "url";
 
 const { Pool } = pg;
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgresql://localhost:5432/ragstack";
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  (process.env.ALLOW_DEV_DB === "true" ? "postgresql://localhost:5432/ragstack" : undefined);
 
 let pool: pg.Pool | null = null;
 
 export function getPool(): pg.Pool {
   if (!pool) {
+    if (!DATABASE_URL) {
+      throw new Error(
+        "DATABASE_URL is not set. Set DATABASE_URL or set ALLOW_DEV_DB=true for local development."
+      );
+    }
+
     pool = new Pool({
       connectionString: DATABASE_URL,
     });
