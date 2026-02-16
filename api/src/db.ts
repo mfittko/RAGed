@@ -8,7 +8,7 @@ const { Pool } = pg;
 function getDatabaseUrl(): string | undefined {
   return (
     process.env.DATABASE_URL ??
-    (process.env.ALLOW_DEV_DB === "true" ? "postgresql://localhost:5432/raged" : undefined)
+    (process.env.ALLOW_DEV_DB === "true" ? "postgresql://raged:raged@localhost:5432/raged" : undefined)
   );
 }
 
@@ -20,7 +20,7 @@ export function getPool(): pg.Pool {
 
     if (!databaseUrl) {
       throw new Error(
-        "DATABASE_URL is not set. Set DATABASE_URL (e.g., postgresql://localhost:5432/raged) or set ALLOW_DEV_DB=true for local development."
+        "DATABASE_URL is not set. Set DATABASE_URL (e.g., postgresql://raged:raged@localhost:5432/raged) or set ALLOW_DEV_DB=true for local development."
       );
     }
 

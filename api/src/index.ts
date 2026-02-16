@@ -15,7 +15,7 @@ export function validateConfig(): string[] {
   // DATABASE_URL is required (unless ALLOW_DEV_DB is set for local dev fallback)
   if (!process.env.DATABASE_URL && process.env.ALLOW_DEV_DB !== "true") {
     errors.push(
-      "DATABASE_URL is required. Set DATABASE_URL (e.g., postgresql://localhost:5432/raged) or set ALLOW_DEV_DB=true for local development."
+      "DATABASE_URL is required. Set DATABASE_URL (e.g., postgresql://raged:raged@localhost:5432/raged) or set ALLOW_DEV_DB=true for local development."
     );
   }
 
@@ -62,7 +62,8 @@ const entrypointPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (entrypointPath && fileURLToPath(import.meta.url) === entrypointPath) {
   init()
     .then((app) => app.listen({ port: PORT, host: "0.0.0.0" }))
-    .catch(() => {
+    .catch((err) => {
+      console.error("Server startup failed:", err);
       process.exit(1);
     });
 }
