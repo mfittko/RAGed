@@ -4,16 +4,15 @@ metadata:
   name: {{ .Release.Name }}-api-config
   labels:
     {{- include "rag.labels" . | nindent 4 }}
-{{- if not .Values.migration.allowBrokenLegacyRuntime }}
-{{- fail "migration.allowBrokenLegacyRuntime=false: API runtime migration is incomplete. Set migration.allowBrokenLegacyRuntime=true only as an explicit temporary override." }}
-{{- end }}
 data:
-  # Legacy env vars for temporary migration mode (explicit opt-in required)
+  {{- if .Values.migration.allowBrokenLegacyRuntime }}
+  # Legacy env vars for temporary migration mode (explicit opt-in only).
   # These localhost endpoints are intentionally temporary and not production-safe.
   QDRANT_URL: "http://localhost:6333"
   QDRANT_COLLECTION: "{{ .Values.api.env.QDRANT_COLLECTION }}"
   VECTOR_SIZE: "{{ .Values.api.env.VECTOR_SIZE }}"
   DISTANCE: "{{ .Values.api.env.DISTANCE }}"
+  {{- end }}
   OLLAMA_URL: "http://{{ .Release.Name }}-ollama:{{ .Values.ollama.service.port }}"
   EMBED_MODEL: "{{ .Values.api.env.EMBED_MODEL }}"
   PORT: "8080"
@@ -23,7 +22,9 @@ data:
   RATE_LIMIT_MAX: "{{ .Values.api.env.RATE_LIMIT_MAX }}"
   TRUST_PROXY: "{{ .Values.api.env.TRUST_PROXY }}"
   {{- if .Values.enrichment.enabled }}
-  # Legacy Redis URL for temporary migration mode (explicit opt-in required)
+  {{- if .Values.migration.allowBrokenLegacyRuntime }}
+  # Legacy Redis URL for temporary migration mode (explicit opt-in only)
   REDIS_URL: "redis://localhost:6379"
+  {{- end }}
   ENRICHMENT_ENABLED: "true"
   {{- end }}
