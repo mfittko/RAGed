@@ -1,5 +1,5 @@
 [project]
-name = "rag-stack-worker"
+name = "raged-worker"
 version = "0.1.0"
 description = "Multi-agent memory hub worker for enrichment processing"
 requires-python = ">=3.12,<3.13"

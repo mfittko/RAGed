@@ -4,7 +4,7 @@ export const FETCH_TIMEOUT_MS = 30_000;
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
 export const MAX_REDIRECTS = 5;
 export const MAX_CONCURRENT_FETCHES = 5;
-export const USER_AGENT = "rag-stack/1.0 (+https://github.com/mfittko/rag-stack)";
+export const USER_AGENT = "raged/1.0 (+https://github.com/mfittko/raged)";
 
 export interface FetchResult {
   url: string;            // Original URL

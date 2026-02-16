@@ -19,7 +19,7 @@ describe("URL fetch service", () => {
     });
 
     it("has correct user agent", () => {
-      expect(USER_AGENT).toBe("rag-stack/1.0 (+https://github.com/mfittko/rag-stack)");
+      expect(USER_AGENT).toBe("raged/1.0 (+https://github.com/mfittko/raged)");
     });
   });
 
