@@ -7,6 +7,6 @@ dist/
 .vscode/
 .idea/
 .tmp/
-tmp/*
+tmp/**
 !tmp/.keep
 coverage/

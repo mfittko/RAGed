@@ -65,8 +65,8 @@ All code changes **must** be reviewed for performance impact. Specifically:
 
 ## Architecture Guardrails
 
-- **Stateless API:** The Fastify API holds no state. All persistence is in Qdrant. This makes horizontal scaling trivial.
-- **No ORM.** Qdrant has a first-party JS client. Use it directly.
+- **Stateless API:** The Fastify API holds no state. All persistence is in Postgres (including pgvector-backed embeddings). This makes horizontal scaling trivial.
+- **No ORM.** Use direct SQL via the Postgres client.
 - **Minimal dependencies.** Every new dependency must justify its existence. Prefer Node.js built-ins.
 - **Environment-driven configuration.** All config via environment variables. No config files, no `.env` loading in production code.
 
