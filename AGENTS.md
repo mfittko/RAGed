@@ -87,3 +87,9 @@ docs/         → Project documentation
 .claude/      → Claude Code skill definitions
 .github/      → CI/CD workflows
 ```
+
+## Local Temporary Files
+
+- Store local one-off helper scripts and scratch artifacts in `tmp/` only.
+- Keep `tmp/.keep` in the repo so the directory exists across checkouts.
+- Do not add ad-hoc temp files outside `tmp/`.
