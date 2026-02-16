@@ -20,7 +20,7 @@ services:
     ports: ["11434:11434"]
     volumes: ["ollama:/root/.ollama"]
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 5
