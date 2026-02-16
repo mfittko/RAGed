@@ -51,7 +51,8 @@ services:
   enrichment-worker:
     build: ./worker
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://raged:raged@postgres:5432/raged}"
+      API_URL: "http://api:8080"
+      API_TOKEN: "${RAGED_API_TOKEN:-}"
       # Legacy vars are intentionally retained as no-op placeholders for migration safety.
       REDIS_URL: "${REDIS_URL:-}"
       QDRANT_URL: "${QDRANT_URL:-}"
@@ -65,8 +66,8 @@ services:
       EXTRACTOR_MODEL_VISION: "llava"
       WORKER_CONCURRENCY: "4"
     depends_on:
-      postgres:
-        condition: service_healthy
+      api:
+        condition: service_started
       ollama:
         condition: service_healthy
     profiles: ["enrichment", "full"]
