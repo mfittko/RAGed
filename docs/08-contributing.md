@@ -96,6 +96,10 @@ Docker images are automatically published to GitHub Container Registry (GHCR) vi
 
 ### Publishing Triggers
 
+**Manual Dispatch:**
+- Triggered from the Actions UI or `gh workflow run`
+- Useful for validating build and publish behavior without pushing a new commit
+
 **Main Branch Pushes:**
 - Triggered on every push to `main`
 - Creates tags: `main` and `sha-<commit-short-sha>`
