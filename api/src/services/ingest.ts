@@ -234,10 +234,11 @@ export async function ingest(
     };
     
     // Copy filter-relevant fields from metadata to tier1Meta
-    if (metadata.repoId) tier1Meta.repoId = metadata.repoId;
-    if (metadata.repoUrl) tier1Meta.repoUrl = metadata.repoUrl;
-    if (metadata.path) tier1Meta.path = metadata.path;
-    if (metadata.lang) tier1Meta.lang = metadata.lang;
+    // Use explicit undefined checks to preserve falsy but valid values (empty strings, 0, etc.)
+    if (metadata.repoId !== undefined) tier1Meta.repoId = metadata.repoId;
+    if (metadata.repoUrl !== undefined) tier1Meta.repoUrl = metadata.repoUrl;
+    if (metadata.path !== undefined) tier1Meta.path = metadata.path;
+    if (metadata.lang !== undefined) tier1Meta.lang = metadata.lang;
 
     processedItems.push({
       baseId: item.id ?? randomUUID(),
@@ -309,11 +310,12 @@ export async function ingest(
           const chunkRows: string[] = [];
           
           // Extract denormalized filter fields from tier1_meta
+          // Use nullish coalescing to preserve empty strings and other falsy values
           const tier1 = procItem.tier1Meta;
-          const repoId = tier1.repoId as string | null || null;
-          const repoUrl = tier1.repoUrl as string | null || null;
-          const path = tier1.path as string | null || null;
-          const lang = tier1.lang as string | null || null;
+          const repoId = (tier1.repoId as string | null | undefined) ?? null;
+          const repoUrl = (tier1.repoUrl as string | null | undefined) ?? null;
+          const path = (tier1.path as string | null | undefined) ?? null;
+          const lang = (tier1.lang as string | null | undefined) ?? null;
           
           // 12 parameters per row: document_id, chunk_index, text, embedding, enrichment_status, tier1_meta, repo_id, repo_url, path, lang, doc_type, item_url
           const PARAMS_PER_CHUNK = 12;
@@ -336,7 +338,7 @@ export async function ingest(
               path,
               lang,
               procItem.docType,
-              procItem.itemUrl || null
+              procItem.itemUrl ?? null
             );
           }
 
