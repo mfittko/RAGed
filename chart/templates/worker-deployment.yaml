@@ -63,15 +63,14 @@ spec:
             initialDelaySeconds: 30
             timeoutSeconds: 5
             periodSeconds: 30
-          # Readiness: process-level readiness only (avoid external dependency coupling)
+          # Readiness: check API availability (worker depends on API for task queue)
           readinessProbe:
             exec:
               command:
-                - python
+                - sh
                 - -c
                 - |
-                  import sys
-                  sys.exit(0)
+                  wget -q -O- --timeout=3 ${API_URL}/healthz | grep -q '"ok":true'
             initialDelaySeconds: 10
             timeoutSeconds: 5
             periodSeconds: 10
