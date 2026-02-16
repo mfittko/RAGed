@@ -1,0 +1,67 @@
+{{- if .Values.seaweedfs.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-seaweedfs
+  labels:
+    {{- include "rag.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: {{ .Release.Name }}-seaweedfs }
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-seaweedfs
+        {{- include "rag.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: seaweedfs
+          image: {{ .Values.seaweedfs.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          args:
+            - server
+            - -s3
+            - -s3.port={{ .Values.seaweedfs.service.s3Port }}
+            - -dir=/data
+          ports:
+            - { containerPort: {{ .Values.seaweedfs.service.masterPort }}, name: master }
+            - { containerPort: {{ .Values.seaweedfs.service.s3Port }}, name: s3 }
+            - { containerPort: 8888, name: filer }
+          env:
+            - name: WEED_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-seaweedfs-secret
+                  key: S3_ACCESS_KEY
+            - name: WEED_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-seaweedfs-secret
+                  key: S3_SECRET_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet: { path: /cluster/status, port: {{ .Values.seaweedfs.service.masterPort }} }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /cluster/status, port: {{ .Values.seaweedfs.service.masterPort }} }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Release.Name }}-seaweedfs-data }
+        - name: tmp
+          emptyDir: {}
+{{- end }}

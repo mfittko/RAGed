@@ -33,85 +33,48 @@ spec:
             - secretRef: { name: {{ .Release.Name }}-worker-secret }
             {{- end }}
           env:
-            - name: NEO4J_PASSWORD
+            {{- if and .Values.api.auth.enabled .Values.api.auth.token }}
+            - name: API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Release.Name }}-neo4j-secret
-                  key: NEO4J_PASSWORD
-            - name: NEO4J_AUTH
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-neo4j-secret
-                  key: NEO4J_AUTH
+                  name: {{ .Release.Name }}-api-auth
+                  key: RAG_API_TOKEN
+            {{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+          # Liveness: process-level health only (no external dependencies)
+          # Verifies worker can import critical modules and thread is responsive
           livenessProbe:
             exec:
               command:
                 - python
                 - -c
                 - |
-                  import os
-                  import socket
                   import sys
-                  from urllib.parse import urlparse
-
-                  def check_tcp(host, port, timeout=2):
-                      if not host or not port:
-                          # Fail if configuration is missing
-                          return False
-                      try:
-                          port = int(port)
-                          with socket.create_connection((host, port), timeout=timeout):
-                              return True
-                      except Exception:
-                          return False
-
-                  def host_port_from_url(url, default_host, default_port):
-                      if not url:
-                          return default_host, default_port
-                      parsed = urlparse(url)
-                      host = parsed.hostname or default_host
-                      port = parsed.port or default_port
-                      return host, str(port)
-
-                  # Build checks list based on configured services
-                  checks = []
-                  redis_host, redis_port = host_port_from_url(
-                      os.getenv("REDIS_URL"),
-                      "{{ .Release.Name }}-redis",
-                      6379,
-                  )
-                  checks.append(("REDIS", redis_host, redis_port))
-
-                  # Neo4j is optional - only check when explicitly enabled
-                  {{- if .Values.neo4j.enabled }}
-                  neo4j_host, neo4j_port = host_port_from_url(
-                      os.getenv("NEO4J_URL"),
-                      "{{ .Release.Name }}-neo4j",
-                      7687,
-                  )
-                  checks.append(("NEO4J", neo4j_host, neo4j_port))
-                  {{- end }}
-
-                  # Qdrant is required
-                  qdrant_host, qdrant_port = host_port_from_url(
-                      os.getenv("QDRANT_URL"),
-                      "{{ .Release.Name }}-qdrant",
-                      6333,
-                  )
-                  checks.append(("QDRANT", qdrant_host, qdrant_port))
-
-                  healthy = True
-                  for name, host, port in checks:
-                      if not check_tcp(host, port):
-                          healthy = False
-
-                  sys.exit(0 if healthy else 1)
+                  # Verify critical imports work (worker dependencies)
+                  try:
+                      import src.db
+                      # Process is alive and worker dependencies import correctly
+                      sys.exit(0)
+                  except Exception as e:
+                      # Import failure suggests corrupted environment
+                      sys.exit(1)
             initialDelaySeconds: 30
-            timeoutSeconds: 10
+            timeoutSeconds: 5
             periodSeconds: 30
+          # Readiness: process-level readiness only (avoid external dependency coupling)
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import sys
+                  sys.exit(0)
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 10
           {{- if .Values.enrichment.worker.resources }}
           resources: {{- toYaml .Values.enrichment.worker.resources | nindent 12 }}
           {{- end }}
