@@ -36,7 +36,7 @@ All templates must pass `helm lint ./chart` cleanly. Run it before committing an
 
 ### Resource Naming Convention
 
-All Kubernetes resources use the pattern: `{{ include "raged.fullname" . }}-<component>` (e.g., `raged-api`, `raged-qdrant`).
+All Kubernetes resources use the pattern: `{{ .Release.Name }}-<component>` (e.g., if release name is `my-raged`, resources are named `my-raged-api`, `my-raged-postgres`, etc.).
 
 ### Conditional Components
 
