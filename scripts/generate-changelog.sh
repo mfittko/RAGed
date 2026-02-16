@@ -46,8 +46,16 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      if [[ -z "$PR_NUMBER" && "$1" =~ ^[0-9]+$ ]]; then
-        PR_NUMBER="$1"
+      if [[ -z "$PR_NUMBER" ]]; then
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+          PR_NUMBER="$1"
+        else
+          echo "Error: Invalid argument '$1'. Expected a PR number or supported flag." >&2
+          exit 1
+        fi
+      else
+        echo "Error: Unexpected extra argument '$1'." >&2
+        exit 1
       fi
       shift
       ;;
@@ -347,8 +355,8 @@ while [[ "$ATTEMPT" -le "$MAX_RETRIES" ]]; do
     fi
     write_debug_artifacts "$DEBUG_BASE" "$JSON_PAYLOAD" "$RESPONSE"
   else
-    INCOMPLETE_REASON=$(echo "$RESPONSE" | jq -r '.incomplete_details.reason // empty')
-    if [[ "$INCOMPLETE_REASON" == "max_output_tokens" ]]; then
+    INCOMPLETE_REASON=$(echo "$RESPONSE" | jq -r '.incomplete_details.reason // .choices[0].finish_reason // empty')
+    if [[ "$INCOMPLETE_REASON" == "max_output_tokens" || "$INCOMPLETE_REASON" == "length" ]]; then
       NEXT_MAX=$((REQUEST_MAX_OUTPUT_TOKENS * 2))
       if [[ "$NEXT_MAX" -gt "$MAX_OUTPUT_TOKENS_CAP" ]]; then
         NEXT_MAX="$MAX_OUTPUT_TOKENS_CAP"
