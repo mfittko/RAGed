@@ -59,12 +59,12 @@ services:
     build:
       context: ./api
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://raged:raged@postgres:5432/raged}"
+      DATABASE_URL: "${COMPOSE_DATABASE_URL:-postgresql://raged:raged@postgres:5432/raged}"
       OLLAMA_URL: "http://ollama:11434"
       EMBED_MODEL: "nomic-embed-text"
       PORT: "8080"
       RAGED_API_TOKEN: ""  # set to enable auth
-      ENRICHMENT_ENABLED: "false"
+      ENRICHMENT_ENABLED: "${ENRICHMENT_ENABLED:-false}"
       DISABLE_SSRF_CHECK: "${DISABLE_SSRF_CHECK:-false}"  # Only true for local development
     ports: ["${API_HOST_PORT:-8080}:8080"]
     depends_on:
