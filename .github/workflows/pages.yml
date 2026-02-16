@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: "pages"
@@ -34,7 +32,8 @@ jobs:
       - name: Add front matter for Jekyll rendering
         run: |
           while IFS= read -r file; do
-            if ! grep -q '^---$' "$file"; then
+            first_line="$(head -n 1 "$file" || true)"
+            if [ "$first_line" != '---' ]; then
               tmp_file="${file}.tmp"
               {
                 printf -- '---\n---\n\n'
@@ -58,6 +57,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
