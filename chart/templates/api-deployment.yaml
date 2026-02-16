@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}-api
   labels:
-    {{- include "rag.labels" . | nindent 4 }}
+    {{- include "raged.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicas }}
   selector:
@@ -13,7 +13,7 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}-api
-        {{- include "rag.labels" . | nindent 8 }}
+        {{- include "raged.labels" . | nindent 8 }}
     spec:
       securityContext:
         runAsNonRoot: true
@@ -61,11 +61,11 @@ spec:
                   key: BLOB_STORE_BUCKET
             {{- end }}
             {{- if and .Values.api.auth.enabled .Values.api.auth.token }}
-            - name: RAG_API_TOKEN
+            - name: RAGED_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-api-auth
-                  key: RAG_API_TOKEN
+                  key: RAGED_API_TOKEN
             {{- end }}
           volumeMounts:
             - name: tmp

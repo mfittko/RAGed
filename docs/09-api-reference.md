@@ -1,12 +1,12 @@
 # API Reference
 
-HTTP API for the rag-stack RAG service.
+HTTP API for the raged RAG service.
 
 **Base URL:** `http://localhost:8080` (local) or your Ingress hostname (remote)
 
 ## Authentication
 
-When `RAG_API_TOKEN` is set on the server, all endpoints except `/healthz` require a bearer token:
+When `RAGED_API_TOKEN` is set on the server, all endpoints except `/healthz` require a bearer token:
 
 ```
 Authorization: Bearer <token>

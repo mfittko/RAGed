@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildApp } from "./server.js";
 
 // Mock the db module
@@ -170,8 +170,56 @@ describe("API integration tests", () => {
   });
 
   describe("auth integration", () => {
-    it("allows /healthz without token", async () => {
+    const ORIGINAL_TOKEN = process.env.RAGED_API_TOKEN;
+
+    afterEach(() => {
+      if (ORIGINAL_TOKEN === undefined) {
+        delete process.env.RAGED_API_TOKEN;
+      } else {
+        process.env.RAGED_API_TOKEN = ORIGINAL_TOKEN;
+      }
+    });
+
+    it("blocks /ingest without token when auth is enabled", async () => {
+      process.env.RAGED_API_TOKEN = "test-secret";
       const app = buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        payload: {
+          items: [{ text: "hello", source: "test.txt" }],
+        },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: "Unauthorized" });
+      await app.close();
+    });
+
+    it("allows /ingest with correct token", async () => {
+      process.env.RAGED_API_TOKEN = "test-secret";
+      const app = buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/ingest",
+        headers: {
+          authorization: "Bearer test-secret",
+        },
+        payload: {
+          items: [{ text: "hello", source: "test.txt" }],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("always allows /healthz without token", async () => {
+      process.env.RAGED_API_TOKEN = "test-secret";
+      const app = buildApp();
+
       const res = await app.inject({
         method: "GET",
         url: "/healthz",
@@ -179,41 +227,6 @@ describe("API integration tests", () => {
 
       expect(res.statusCode).toBe(200);
       await app.close();
-    });
-
-    it("returns 401 for /ingest without token when RAG_API_TOKEN is set", async () => {
-      process.env.RAG_API_TOKEN = "secret-token";
-      const app = buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/ingest",
-        payload: {
-          items: [{ text: "test", source: "test.txt" }],
-        },
-      });
-
-      expect(res.statusCode).toBe(401);
-      await app.close();
-      delete process.env.RAG_API_TOKEN;
-    });
-
-    it("allows /ingest with correct token", async () => {
-      process.env.RAG_API_TOKEN = "secret-token";
-      const app = buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/ingest",
-        headers: {
-          authorization: "Bearer secret-token",
-        },
-        payload: {
-          items: [{ text: "test", source: "test.txt" }],
-        },
-      });
-
-      expect(res.statusCode).toBe(200);
-      await app.close();
-      delete process.env.RAG_API_TOKEN;
     });
   });
 

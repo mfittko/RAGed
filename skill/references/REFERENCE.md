@@ -1,4 +1,4 @@
-# rag-stack API Reference
+# raged API Reference
 
 Detailed reference for advanced usage. The agent loads this on demand for complex scenarios.
 
@@ -94,7 +94,7 @@ Embeds query text, performs vector similarity search.
 
 | Service | Default URL | Purpose |
 |---------|------------|---------|
-| rag-stack API | `http://localhost:8080` | HTTP gateway |
+| raged API | `http://localhost:8080` | HTTP gateway |
 | Qdrant | `http://localhost:6333` | Vector database |
 | Ollama | `http://localhost:11434` | Embedding model |
 
@@ -111,4 +111,4 @@ Embeds query text, performs vector similarity search.
 | `DISTANCE` | `Cosine` | Similarity metric |
 | `EMBED_MODEL` | `nomic-embed-text` | Ollama model name |
 | `PORT` | `8080` | API listen port |
-| `RAG_API_TOKEN` | _(empty)_ | Bearer token (empty = auth disabled) |
+| `RAGED_API_TOKEN` | _(empty)_ | Bearer token (empty = auth disabled) |

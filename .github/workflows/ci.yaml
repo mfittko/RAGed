@@ -68,11 +68,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: rag_test
+          POSTGRES_DB: raged_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres -d rag_test"
+          --health-cmd="pg_isready -U postgres -d raged_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -80,7 +80,7 @@ jobs:
       run:
         working-directory: api
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rag_test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/raged_test
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node
@@ -173,10 +173,10 @@ jobs:
         include:
           - component: api
             context: ./api
-            tag: rag-api:ci
+            tag: raged-api:ci
           - component: indexer
             context: ./cli
-            tag: rag-index:ci
+            tag: raged:ci
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -202,7 +202,7 @@ jobs:
         with:
           context: ./worker
           push: false
-          tags: rag-worker:ci
+          tags: raged-worker:ci
           cache-from: type=gha,scope=docker-worker
           cache-to: type=gha,mode=max,scope=docker-worker
 
