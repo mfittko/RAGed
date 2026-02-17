@@ -63,4 +63,3 @@ All configuration is via environment variables. Document every env var in this f
 | `BLOB_STORE_BUCKET` | _(empty)_ | Target S3 bucket for raw blobs |
 | `BLOB_STORE_REGION` | `us-east-1` | S3 region for blob store client |
 | `BLOB_STORE_THRESHOLD_BYTES` | _(disabled)_ | Offload threshold (store raw blobs only when item size exceeds this) |
-| `BODY_LIMIT_BYTES` | `10485760` | Max HTTP request body size in bytes (supports larger base64 raw payload ingest) |
