@@ -11,8 +11,7 @@ function getEmbedProvider(): EmbedProvider {
   return "ollama";
 }
 
-async function embedOne(text: string): Promise<number[]> {
-  const provider = getEmbedProvider();
+async function embedOne(text: string, provider: EmbedProvider): Promise<number[]> {
   if (provider === "openai") {
     return embedWithOpenAi(text);
   }
@@ -25,11 +24,13 @@ export async function embed(texts: string[], concurrency = 10): Promise<number[]
     throw new Error("concurrency must be a positive integer");
   }
 
+  const provider = getEmbedProvider();
+
   const results: number[][] = new Array(texts.length);
 
   for (let i = 0; i < texts.length; i += concurrency) {
     const batch = texts.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map((text) => embedOne(text)));
+    const batchResults = await Promise.all(batch.map((text) => embedOne(text, provider)));
     for (let j = 0; j < batchResults.length; j++) {
       results[i + j] = batchResults[j];
     }

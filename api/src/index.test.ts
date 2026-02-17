@@ -7,7 +7,9 @@ describe("validateConfig", () => {
     OLLAMA_URL: process.env.OLLAMA_URL,
     ALLOW_DEV_DB: process.env.ALLOW_DEV_DB,
     EMBED_PROVIDER: process.env.EMBED_PROVIDER,
+    EMBED_MODEL: process.env.EMBED_MODEL,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_EMBEDDING_MODEL: process.env.OPENAI_EMBEDDING_MODEL,
   };
 
   afterEach(() => {
@@ -43,6 +45,7 @@ describe("validateConfig", () => {
   it("returns error when OLLAMA_URL is missing", () => {
     process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
     delete process.env.EMBED_PROVIDER;
+    process.env.EMBED_MODEL = "mxbai-embed-large";
     delete process.env.OLLAMA_URL;
 
     const errors = validateConfig();
@@ -82,6 +85,7 @@ describe("validateConfig", () => {
   it("returns empty array when all required config is present", () => {
     process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
     delete process.env.EMBED_PROVIDER;
+    process.env.EMBED_MODEL = "mxbai-embed-large";
     process.env.OLLAMA_URL = "http://localhost:11434";
 
     const errors = validateConfig();
@@ -91,11 +95,34 @@ describe("validateConfig", () => {
   it("returns multiple errors when multiple configs are missing", () => {
     delete process.env.DATABASE_URL;
     delete process.env.ALLOW_DEV_DB;
+    process.env.EMBED_MODEL = "mxbai-embed-large";
     delete process.env.OLLAMA_URL;
 
     const errors = validateConfig();
     expect(errors.length).toBe(2);
     expect(errors.some(e => e.includes("DATABASE_URL"))).toBe(true);
     expect(errors.some(e => e.includes("OLLAMA_URL"))).toBe(true);
+  });
+
+  it("returns error when default Ollama model is incompatible with vector(1536)", () => {
+    process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
+    delete process.env.EMBED_PROVIDER;
+    delete process.env.EMBED_MODEL;
+    process.env.OLLAMA_URL = "http://localhost:11434";
+
+    const errors = validateConfig();
+    expect(errors.some(e => e.includes("nomic-embed-text"))).toBe(true);
+    expect(errors.some(e => e.includes("vector(1536)"))).toBe(true);
+  });
+
+  it("returns error when OPENAI_EMBEDDING_MODEL=text-embedding-3-large", () => {
+    process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
+    process.env.EMBED_PROVIDER = "openai";
+    process.env.OPENAI_API_KEY = "test-openai-key";
+    process.env.OPENAI_EMBEDDING_MODEL = "text-embedding-3-large";
+
+    const errors = validateConfig();
+    expect(errors.some(e => e.includes("text-embedding-3-large"))).toBe(true);
+    expect(errors.some(e => e.includes("vector(1536)"))).toBe(true);
   });
 });
