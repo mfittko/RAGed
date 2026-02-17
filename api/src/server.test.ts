@@ -20,7 +20,14 @@ vi.mock("./db.js", () => ({
   closePool: vi.fn(),
 }));
 
-// Mock ollama module
+// Mock embeddings module
+vi.mock("./embeddings.js", () => ({
+  embed: vi.fn(async (texts: string[]) =>
+    texts.map(() => Array(768).fill(0.1))
+  ),
+}));
+
+// Mock ollama module (used by query path)
 vi.mock("./ollama.js", () => ({
   embed: vi.fn(async (texts: string[]) =>
     texts.map(() => Array(768).fill(0.1))
