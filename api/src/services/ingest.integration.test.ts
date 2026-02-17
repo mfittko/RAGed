@@ -326,10 +326,13 @@ describe("ingest integration (Postgres)", () => {
   });
 
   it("skips existing identity when overwrite is not enabled", async () => {
+    const testText = "export const hello = true;";
+    const testChecksum = createHash("sha256").update(Buffer.from(testText, "utf8")).digest("hex");
+    
     mockClient.query = vi.fn(async (sql: string) => {
       if (sql.includes("SELECT identity_key, payload_checksum")) {
         return {
-          rows: [{ identity_key: "repo/src/auth.ts", payload_checksum: "existing-checksum" }],
+          rows: [{ identity_key: "repo/src/auth.ts", payload_checksum: testChecksum }],
         };
       }
 
@@ -349,7 +352,7 @@ describe("ingest integration (Postgres)", () => {
         items: [
           {
             source: "repo/src/auth.ts",
-            text: "export const hello = true;",
+            text: testText,
             docType: "code",
           },
         ],
