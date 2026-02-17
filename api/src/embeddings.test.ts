@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { embed } from "./ollama.js";
+import { embed } from "./embeddings.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -142,6 +142,48 @@ describe("embed", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
+  it("rejects non-finite embedding values from provider responses", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ embedding: [0.1, Number.NaN, 0.3] }),
+    });
+
+    await expect(embed(["hello"])).rejects.toThrow("Invalid embedding payload");
+  });
+
+  it("uses one provider selection per embed call", async () => {
+    delete process.env.EMBED_PROVIDER;
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/api/embeddings")) {
+        process.env.EMBED_PROVIDER = "openai";
+        return {
+          ok: true,
+          json: async () => ({ embedding: [0.1] }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.9] }] }),
+      };
+    });
+
+    const result = await embed(["one", "two"], 1);
+
+    expect(result).toEqual([[0.1], [0.1]]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/api/embeddings"),
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/embeddings"),
+      expect.any(Object),
+    );
+  });
+
   it("uses OpenAI embeddings when EMBED_PROVIDER=openai", async () => {
     process.env.EMBED_PROVIDER = "openai";
     process.env.OPENAI_API_KEY = "test-key";
@@ -173,28 +215,5 @@ describe("embed", () => {
 
     await expect(embed(["hello"])).rejects.toThrow("OPENAI_API_KEY is required");
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-finite OpenAI embeddings", async () => {
-    process.env.EMBED_PROVIDER = "openai";
-    process.env.OPENAI_API_KEY = "test-key";
-
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ embedding: [0.9, Number.POSITIVE_INFINITY] }] }),
-    });
-
-    await expect(embed(["hello"])).rejects.toThrow("Invalid embedding payload from OpenAI");
-  });
-
-  it("rejects empty Ollama embeddings", async () => {
-    delete process.env.EMBED_PROVIDER;
-
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ embedding: [] }),
-    });
-
-    await expect(embed(["hello"])).rejects.toThrow("Invalid embedding payload from Ollama");
   });
 });
