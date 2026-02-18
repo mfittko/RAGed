@@ -6,6 +6,18 @@ The format is based on [Common Changelog](https://common-changelog.org/).
 
 ---
 
+## February 18, 2026
+
+### Added
+
+- **Null-byte sanitization** ([#97](https://github.com/mfittko/RAGed/pull/97)): Added recursive sanitizers that strip null bytes from documents, chunks, and metadata prior to database writes, while logging per-item metadata failures to avoid 500 responses when encountering circular references or deep nesting.
+- **HTML to Markdown fallback** ([#97](https://github.com/mfittko/RAGed/pull/97)): Integrated a Turndown-based conversion into URL extraction fallbacks so HTML content can be captured as structured Markdown (headings, lists, links, code blocks) for downstream ingestion.
+
+### Changed
+
+- **Refined ingest handling** ([#97](https://github.com/mfittko/RAGed/pull/97)): Switched to the shared embeddings abstraction, expanded error classification to distinguish unsupported content, empty extraction, and invalid metadata cases, and branched conflict SQL by the overwrite flag to better control updates.
+
+
 
 ## February 17, 2026
 
