@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getEnrichmentStatus, getEnrichmentStats, enqueueEnrichment } from "./enrichment.js";
+import { getEnrichmentStatus, getEnrichmentStats, enqueueEnrichment, clearEnrichmentQueue } from "./enrichment.js";
 
 // Mock the db module
 vi.mock("../db.js", () => ({
@@ -108,6 +108,40 @@ describe("enrichment service", () => {
       expect(result.status).toBe("mixed");
       expect(result.chunks.total).toBe(2);
     });
+
+    it("extracts error metadata from tier3_meta._error on failed chunks", async () => {
+      const { getPool } = await import("../db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              enrichment_status: "failed",
+              enriched_at: null,
+              tier2_meta: null,
+              tier3_meta: {
+                _error: {
+                  message: "Test error",
+                  taskId: "task-123",
+                  attempt: 3,
+                  maxAttempts: 3,
+                  final: true,
+                  failedAt: "2024-01-01T00:00:00Z",
+                  chunkIndex: 0,
+                },
+              },
+            },
+          ],
+        })),
+      });
+
+      const result = await getEnrichmentStatus({ baseId: "failed-id" });
+      expect(result.status).toBe("failed");
+      expect(result.metadata?.error).toBeDefined();
+      expect(result.metadata?.error?.message).toBe("Test error");
+      expect(result.metadata?.error?.taskId).toBe("task-123");
+      expect(result.metadata?.error?.attempt).toBe(3);
+      expect(result.metadata?.error?.final).toBe(true);
+    });
   });
 
   describe("getEnrichmentStats", () => {
@@ -116,6 +150,43 @@ describe("enrichment service", () => {
 
       expect(result.queue).toBeDefined();
       expect(result.totals).toBeDefined();
+    });
+
+    it("applies filter to queue and chunk statistics", async () => {
+      const { getPool } = await import("../db.js");
+      const mockQuery = vi.fn(async (sql: string) => {
+        if (sql.includes("FROM task_queue")) {
+          return {
+            rows: [
+              { status: "pending", count: 5 },
+            ],
+          };
+        } else if (sql.includes("FROM chunks c")) {
+          return {
+            rows: [
+              { enrichment_status: "enriched", count: 25 },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      (getPool as any).mockReturnValueOnce({
+        query: mockQuery,
+      });
+
+      const result = await getEnrichmentStats({ filter: "test filter", collection: "docs" });
+
+      expect(result.queue).toBeDefined();
+      expect(result.totals).toBeDefined();
+
+      // Verify filter was applied in SQL
+      const calls = mockQuery.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const queueQuery = calls.find((c: any) => c[0].includes("FROM task_queue"));
+      expect(queueQuery).toBeDefined();
+      expect(queueQuery![0]).toContain("websearch_to_tsquery");
+      expect(queueQuery![0]).toContain("ILIKE");
     });
   });
 
@@ -196,6 +267,99 @@ describe("enrichment service", () => {
 
       const [sql] = clientQuery.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain("c.enrichment_status != 'enriched'");
+    });
+
+    it("applies full-text filter to chunk selection", async () => {
+      const clientQuery = vi
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              chunk_id: "test-id:0",
+              document_id: "doc-1",
+              base_id: "test-id",
+              chunk_index: 0,
+              text: "test content with filter text",
+              source: "test.txt",
+              doc_type: "text",
+              tier1_meta: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ document_id: "doc-1", total_chunks: 1 }],
+        })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const { getPool } = await import("../db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [] })),
+        connect: vi.fn(async () => ({
+          query: clientQuery,
+          release: vi.fn(),
+        })),
+      });
+
+      const result = await enqueueEnrichment({
+        collection: "test",
+        filter: "filter text",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.enqueued).toBe(1);
+
+      const [sql] = clientQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("websearch_to_tsquery");
+      expect(sql).toContain("ILIKE");
+    });
+  });
+
+  describe("clearEnrichmentQueue", () => {
+    it("clears pending, processing, and dead tasks", async () => {
+      const { getPool } = await import("../db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rowCount: 5 })),
+      });
+
+      const result = await clearEnrichmentQueue({ collection: "test" });
+
+      expect(result.ok).toBe(true);
+      expect(result.cleared).toBe(5);
+    });
+
+    it("applies filter when clearing queue", async () => {
+      const { getPool } = await import("../db.js");
+      const mockQuery = vi.fn(async () => ({ rowCount: 3 }));
+      (getPool as any).mockReturnValueOnce({
+        query: mockQuery,
+      });
+
+      const result = await clearEnrichmentQueue({
+        collection: "test",
+        filter: "specific filter",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.cleared).toBe(3);
+
+      const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("DELETE FROM task_queue");
+      expect(sql).toContain("websearch_to_tsquery");
+      expect(sql).toContain("ILIKE");
+      expect(sql).toContain("IN ('pending', 'processing', 'dead')");
+    });
+
+    it("returns 0 when no tasks to clear", async () => {
+      const { getPool } = await import("../db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rowCount: 0 })),
+      });
+
+      const result = await clearEnrichmentQueue({ collection: "test" });
+
+      expect(result.ok).toBe(true);
+      expect(result.cleared).toBe(0);
     });
   });
 });
