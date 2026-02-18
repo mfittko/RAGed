@@ -7,7 +7,7 @@ import { fetchUrls } from "./url-fetch.js";
 import { extractContentAsync } from "./url-extract.js";
 import { getPool } from "../db.js";
 import { deriveIdentityKey, formatVector } from "../pg-helpers.js";
-import { embed as embedTexts } from "../ollama.js";
+import { embed as embedTexts } from "../embeddings.js";
 import { shouldStoreRawBlob, uploadRawBlob } from "../blob-store.js";
 
 // Enrichment functions using Postgres task_queue
@@ -69,6 +69,109 @@ function asNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function stripNullBytes(value: string): string {
+  if (!value.includes("\u0000")) {
+    return value;
+  }
+
+  return value.replace(/\u0000/g, "");
+}
+
+const MAX_METADATA_NESTING_DEPTH = 64;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function sanitizeLeafValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return stripNullBytes(value);
+  }
+
+  return value;
+}
+
+function sanitizeJsonValue(value: unknown): unknown {
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    return sanitizeLeafValue(value);
+  }
+
+  const seen = new WeakSet<object>();
+  const rootTarget: unknown = Array.isArray(value) ? [] : {};
+  const stack: Array<{
+    source: unknown[] | Record<string, unknown>;
+    target: unknown[] | Record<string, unknown>;
+    depth: number;
+  }> = [
+    {
+      source: value,
+      target: rootTarget as unknown[] | Record<string, unknown>,
+      depth: 0,
+    },
+  ];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+
+    if (frame.depth > MAX_METADATA_NESTING_DEPTH) {
+      throw new Error(`metadata exceeds maximum nesting depth of ${MAX_METADATA_NESTING_DEPTH}`);
+    }
+
+    if (seen.has(frame.source as object)) {
+      throw new Error("metadata contains circular references");
+    }
+    seen.add(frame.source as object);
+
+    if (Array.isArray(frame.source) && Array.isArray(frame.target)) {
+      for (const entry of frame.source) {
+        if (Array.isArray(entry)) {
+          const nextTarget: unknown[] = [];
+          frame.target.push(nextTarget);
+          stack.push({ source: entry, target: nextTarget, depth: frame.depth + 1 });
+          continue;
+        }
+
+        if (isPlainObject(entry)) {
+          const nextTarget: Record<string, unknown> = {};
+          frame.target.push(nextTarget);
+          stack.push({ source: entry, target: nextTarget, depth: frame.depth + 1 });
+          continue;
+        }
+
+        frame.target.push(sanitizeLeafValue(entry));
+      }
+
+      continue;
+    }
+
+    if (isPlainObject(frame.source) && isPlainObject(frame.target)) {
+      for (const [key, entry] of Object.entries(frame.source)) {
+        if (Array.isArray(entry)) {
+          const nextTarget: unknown[] = [];
+          frame.target[key] = nextTarget;
+          stack.push({ source: entry, target: nextTarget, depth: frame.depth + 1 });
+          continue;
+        }
+
+        if (isPlainObject(entry)) {
+          const nextTarget: Record<string, unknown> = {};
+          frame.target[key] = nextTarget;
+          stack.push({ source: entry, target: nextTarget, depth: frame.depth + 1 });
+          continue;
+        }
+
+        frame.target[key] = sanitizeLeafValue(entry);
+      }
+    }
+  }
+
+  return rootTarget;
+}
+
+function sanitizeMetadataRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeJsonValue(value) as Record<string, unknown>;
 }
 
 function toSourceFromUrl(rawUrl: string): string {
@@ -217,12 +320,20 @@ export async function ingest(
         // Extract text from fetched content
         const extraction = await extractContentAsync(fetchResult.body, fetchResult.contentType);
         
-        if (extraction.strategy === "metadata-only" || !extraction.text) {
-          // Unsupported content type - add to errors (synchronous push is safe)
+        if (extraction.strategy === "metadata-only") {
           fetchErrors.push({
             url: item.url!,
             status: fetchResult.status,
             reason: `unsupported_content_type: ${fetchResult.contentType}`,
+          });
+          continue;
+        }
+
+        if (!extraction.text) {
+          fetchErrors.push({
+            url: item.url!,
+            status: fetchResult.status,
+            reason: `no_extractable_text: ${fetchResult.contentType}`,
           });
           continue;
         }
@@ -312,11 +423,30 @@ export async function ingest(
       continue;
     }
 
+    const sanitizedText = stripNullBytes(item.text);
+    const source = stripNullBytes(item.source);
+    const itemUrl = item.url ? stripNullBytes(item.url) : undefined;
     const docType = detectDocType(item);
-    const tier1Meta = extractTier1(item, docType);
-    const metadata: Record<string, unknown> = {
-      ...(item.metadata ?? {}),
-    };
+
+    // Sanitize metadata with error handling for malformed data
+    let tier1Meta: Record<string, unknown>;
+    let metadata: Record<string, unknown>;
+
+    try {
+      tier1Meta = sanitizeMetadataRecord(extractTier1(item, docType));
+      metadata = sanitizeMetadataRecord({
+        ...(item.metadata ?? {}),
+      });
+    } catch (error) {
+      // Handle sanitization failures per item (depth/cycle errors)
+      const errorMessage = error instanceof Error ? error.message : "metadata sanitization failed";
+      fetchErrors.push({
+        url: item.url || item.source || "(unknown)",
+        status: null,
+        reason: `invalid_metadata: ${errorMessage}`,
+      });
+      continue;
+    }
     
     // Copy filter-relevant fields from metadata to tier1Meta
     // Use explicit undefined checks to preserve falsy but valid values (empty strings, 0, etc.)
@@ -330,21 +460,21 @@ export async function ingest(
     const path = asNonEmptyString(metadata.path);
     const lang = asNonEmptyString(metadata.lang) ?? asNonEmptyString(tier1Meta.lang);
 
-    const { rawBytes, rawMimeType } = resolveRawPayload(item, item.source, item.text, metadata);
+    const { rawBytes, rawMimeType } = resolveRawPayload(item, source, sanitizedText, metadata);
 
     processedItems.push({
       baseId: item.id ?? randomUUID(),
-      identityKey: deriveIdentityKey(item.source),
+      identityKey: deriveIdentityKey(source),
       payloadChecksum: computePayloadChecksum(rawBytes),
       docType,
       tier1Meta,
-      chunks: chunkText(item.text),
-      source: item.source,
+      chunks: chunkText(sanitizedText),
+      source,
       repoId,
       repoUrl,
       path,
       lang,
-      itemUrl: item.url,
+      itemUrl,
       metadata,
       rawData: rawBytes,
       rawMimeType,
@@ -406,9 +536,9 @@ export async function ingest(
                 base_id, identity_key, source, item_url, doc_type, collection, repo_id, repo_url, path, lang, metadata, payload_checksum, raw_key, raw_bytes, mime_type, ingested_at
               , raw_data
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-              ON CONFLICT (collection, identity_key) 
+              ON CONFLICT (collection, identity_key)
               DO UPDATE SET
-                base_id = documents.base_id,
+                source = EXCLUDED.source,
                 item_url = EXCLUDED.item_url,
                 doc_type = EXCLUDED.doc_type,
                 repo_id = EXCLUDED.repo_id,
@@ -427,7 +557,7 @@ export async function ingest(
                 base_id, identity_key, source, item_url, doc_type, collection, repo_id, repo_url, path, lang, metadata, payload_checksum, raw_key, raw_bytes, mime_type, ingested_at
               , raw_data
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-              ON CONFLICT (collection, identity_key)
+              ON CONFLICT
               DO NOTHING
               RETURNING id, base_id`,
           [
