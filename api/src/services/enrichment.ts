@@ -2,6 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { EnrichmentTask } from "../types.js";
 import { getPool } from "../db.js";
 
+function isInvalidTsQueryError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const maybeError = error as { code?: unknown; message?: unknown };
+  const code = typeof maybeError.code === "string" ? maybeError.code : "";
+  const message = typeof maybeError.message === "string" ? maybeError.message.toLowerCase() : "";
+
+  return code === "42601" || message.includes("syntax error in tsquery") || message.includes("websearch_to_tsquery");
+}
+
 export interface EnrichmentStatusRequest {
   baseId: string;
   collection?: string;
@@ -22,7 +34,21 @@ export interface EnrichmentStatusResult {
   metadata?: {
     tier2?: Record<string, unknown>;
     tier3?: Record<string, unknown>;
+    error?: {
+      message: string;
+      taskId?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      final?: boolean;
+      failedAt?: string;
+      chunkIndex?: number;
+    };
   };
+}
+
+export interface EnrichmentStatsRequest {
+  collection?: string;
+  filter?: string;
 }
 
 export interface EnrichmentStatsResult {
@@ -43,6 +69,17 @@ export interface EnrichmentStatsResult {
 export interface EnqueueRequest {
   collection?: string;
   force?: boolean;
+  filter?: string;
+}
+
+export interface ClearRequest {
+  collection?: string;
+  filter?: string;
+}
+
+export interface ClearResult {
+  ok: true;
+  cleared: number;
 }
 
 export interface EnqueueResult {
@@ -92,6 +129,15 @@ export async function getEnrichmentStatus(
   let latestExtractedAt: string | undefined;
   let tier2Meta: Record<string, unknown> | undefined;
   let tier3Meta: Record<string, unknown> | undefined;
+  let errorMeta: {
+    message: string;
+    taskId?: string;
+    attempt?: number;
+    maxAttempts?: number;
+    final?: boolean;
+    failedAt?: string;
+    chunkIndex?: number;
+  } | undefined;
 
   for (const chunk of result.rows) {
     const status = chunk.enrichment_status || "none";
@@ -110,6 +156,23 @@ export async function getEnrichmentStatus(
       }
       if (chunk.tier3_meta) {
         tier3Meta = chunk.tier3_meta;
+      }
+    }
+
+    // Extract error metadata from tier3_meta._error
+    if (status === "failed" && chunk.tier3_meta && typeof chunk.tier3_meta === "object") {
+      const error = chunk.tier3_meta._error;
+      if (error && typeof error === "object") {
+        const errorObject = error as Record<string, unknown>;
+        errorMeta = {
+          message: typeof errorObject.message === "string" ? errorObject.message : "Unknown error",
+          taskId: typeof errorObject.taskId === "string" ? errorObject.taskId : undefined,
+          attempt: typeof errorObject.attempt === "number" ? errorObject.attempt : undefined,
+          maxAttempts: typeof errorObject.maxAttempts === "number" ? errorObject.maxAttempts : undefined,
+          final: typeof errorObject.final === "boolean" ? errorObject.final : undefined,
+          failedAt: typeof errorObject.failedAt === "string" ? errorObject.failedAt : undefined,
+          chunkIndex: typeof errorObject.chunkIndex === "number" ? errorObject.chunkIndex : undefined,
+        };
       }
     }
   }
@@ -144,25 +207,125 @@ export async function getEnrichmentStatus(
     statusResult.extractedAt = latestExtractedAt;
   }
 
-  if (tier2Meta || tier3Meta) {
+  if (tier2Meta || tier3Meta || errorMeta) {
     statusResult.metadata = {};
     if (tier2Meta) statusResult.metadata.tier2 = tier2Meta;
     if (tier3Meta) statusResult.metadata.tier3 = tier3Meta;
+    if (errorMeta) statusResult.metadata.error = errorMeta;
   }
 
   return statusResult;
 }
 
-export async function getEnrichmentStats(): Promise<EnrichmentStatsResult> {
+export async function getEnrichmentStats(request?: EnrichmentStatsRequest): Promise<EnrichmentStatsResult> {
   const pool = getPool();
+  const col = request?.collection || "docs";
+  const filter = request?.filter;
 
-  // Get queue stats from task_queue
-  const queueResult = await pool.query<{ status: string; count: number }>(
-    `SELECT status, COUNT(*)::int AS count
-    FROM task_queue
-    WHERE queue = 'enrichment'
-    GROUP BY status`
-  );
+  const runQuery = async (enableTsQuery: boolean): Promise<{
+    queueResult: { rows: Array<{ status: string; count: number }> };
+    chunksResult: { rows: Array<{ enrichment_status: string; count: number }> };
+  }> => {
+    let queueFilterClause = "";
+    let chunksFilterClause = "";
+    const queueParams: unknown[] = [];
+    const chunksParams: unknown[] = [];
+
+    if (filter) {
+      const queueFilterPattern = `%${filter}%`;
+      queueFilterClause = enableTsQuery
+        ? ` AND (
+      to_tsvector('simple', concat_ws(' ',
+        t.payload->>'text',
+        t.payload->>'source',
+        t.payload->>'baseId',
+        t.payload->>'docType'
+      )) @@ websearch_to_tsquery('simple', $1)
+      OR t.payload->>'text' ILIKE $2
+      OR t.payload->>'source' ILIKE $2
+      OR t.payload->>'baseId' ILIKE $2
+      OR t.payload->>'docType' ILIKE $2
+    )`
+        : ` AND (
+      t.payload->>'text' ILIKE $1
+      OR t.payload->>'source' ILIKE $1
+      OR t.payload->>'baseId' ILIKE $1
+      OR t.payload->>'docType' ILIKE $1
+    )`;
+      if (enableTsQuery) {
+        queueParams.push(filter, queueFilterPattern);
+      } else {
+        queueParams.push(queueFilterPattern);
+      }
+
+      const chunksFilterPattern = `%${filter}%`;
+      chunksFilterClause = enableTsQuery
+        ? ` WHERE (
+      to_tsvector('simple', concat_ws(' ',
+        c.text,
+        d.source,
+        c.doc_type,
+        d.summary,
+        d.summary_short,
+        d.summary_medium,
+        d.summary_long
+      )) @@ websearch_to_tsquery('simple', $1)
+      OR c.text ILIKE $2
+      OR d.source ILIKE $2
+      OR c.doc_type ILIKE $2
+      OR d.summary ILIKE $2
+      OR d.summary_short ILIKE $2
+      OR d.summary_medium ILIKE $2
+      OR d.summary_long ILIKE $2
+    )`
+        : ` WHERE (
+      c.text ILIKE $1
+      OR d.source ILIKE $1
+      OR c.doc_type ILIKE $1
+      OR d.summary ILIKE $1
+      OR d.summary_short ILIKE $1
+      OR d.summary_medium ILIKE $1
+      OR d.summary_long ILIKE $1
+    )`;
+      if (enableTsQuery) {
+        chunksParams.push(filter, chunksFilterPattern);
+      } else {
+        chunksParams.push(chunksFilterPattern);
+      }
+    }
+
+    const queueResult = await pool.query<{ status: string; count: number }>(
+      `SELECT status, COUNT(*)::int AS count
+      FROM task_queue t
+      WHERE t.queue = 'enrichment'
+        AND COALESCE(t.payload->>'collection', 'docs') = $${queueParams.length + 1}${queueFilterClause}
+      GROUP BY status`,
+      [...queueParams, col]
+    );
+
+    const chunksResult = await pool.query<{ enrichment_status: string; count: number }>(
+      `SELECT c.enrichment_status, COUNT(*)::int AS count
+      FROM chunks c
+      JOIN documents d ON c.document_id = d.id${chunksFilterClause}
+        ${filter ? "AND" : "WHERE"} d.collection = $${chunksParams.length + 1}
+      GROUP BY c.enrichment_status`,
+      [...chunksParams, col]
+    );
+
+    return { queueResult, chunksResult };
+  };
+
+  let queueResult: { rows: Array<{ status: string; count: number }> };
+  let chunksResult: { rows: Array<{ enrichment_status: string; count: number }> };
+
+  try {
+    ({ queueResult, chunksResult } = await runQuery(true));
+  } catch (error) {
+    if (!filter || !isInvalidTsQueryError(error)) {
+      throw error;
+    }
+    ({ queueResult, chunksResult } = await runQuery(false));
+  }
 
   const queueCounts = {
     pending: 0,
@@ -179,13 +342,6 @@ export async function getEnrichmentStats(): Promise<EnrichmentStatsResult> {
       queueCounts.deadLetter = row.count;
     }
   }
-
-  // Get totals from chunks table
-  const chunksResult = await pool.query<{ enrichment_status: string; count: number }>(
-    `SELECT enrichment_status, COUNT(*)::int AS count
-    FROM chunks
-    GROUP BY enrichment_status`
-  );
 
   const totals = {
     enriched: 0,
@@ -221,6 +377,8 @@ export async function enqueueEnrichment(
     filterSql = " AND c.enrichment_status != 'enriched'";
   }
 
+  const filterText = request.filter;
+
   interface ChunkRow {
     chunk_id: string;
     document_id: string;
@@ -240,20 +398,68 @@ export async function enqueueEnrichment(
 
   const client = await pool.connect();
   try {
+    const buildTextFilter = (enableTsQuery: boolean): { textFilterClause: string; baseParams: unknown[] } => {
+      let textFilterClause = "";
+      const baseParams: unknown[] = [col];
+
+      if (filterText) {
+        const filterPattern = `%${filterText}%`;
+        textFilterClause = enableTsQuery
+          ? ` AND (
+      to_tsvector('simple', concat_ws(' ',
+        c.text,
+        d.source,
+        c.doc_type,
+        d.summary,
+        d.summary_short,
+        d.summary_medium,
+        d.summary_long
+      )) @@ websearch_to_tsquery('simple', $${baseParams.length + 1})
+      OR c.text ILIKE $${baseParams.length + 2}
+      OR d.source ILIKE $${baseParams.length + 2}
+      OR c.doc_type ILIKE $${baseParams.length + 2}
+      OR d.summary ILIKE $${baseParams.length + 2}
+      OR d.summary_short ILIKE $${baseParams.length + 2}
+      OR d.summary_medium ILIKE $${baseParams.length + 2}
+      OR d.summary_long ILIKE $${baseParams.length + 2}
+    )`
+          : ` AND (
+      c.text ILIKE $${baseParams.length + 1}
+      OR d.source ILIKE $${baseParams.length + 1}
+      OR c.doc_type ILIKE $${baseParams.length + 1}
+      OR d.summary ILIKE $${baseParams.length + 1}
+      OR d.summary_short ILIKE $${baseParams.length + 1}
+      OR d.summary_medium ILIKE $${baseParams.length + 1}
+      OR d.summary_long ILIKE $${baseParams.length + 1}
+    )`;
+        if (enableTsQuery) {
+          baseParams.push(filterText, filterPattern);
+        } else {
+          baseParams.push(filterPattern);
+        }
+      }
+
+      return { textFilterClause, baseParams };
+    };
+
+    let useTsQuery = true;
     while (true) {
+      const { textFilterClause, baseParams } = buildTextFilter(useTsQuery);
       const cursorClause: string = lastDocumentId
-        ? ` AND (d.id > $2::uuid OR (d.id = $2::uuid AND c.chunk_index > $3))`
+        ? ` AND (d.id > $${baseParams.length + 1}::uuid OR (d.id = $${baseParams.length + 1}::uuid AND c.chunk_index > $${baseParams.length + 2}))`
         : "";
 
-      const queryParams: unknown[] = [col];
+      const queryParams: unknown[] = [...baseParams];
       if (lastDocumentId) {
         queryParams.push(lastDocumentId, lastChunkIndex);
       }
       const limitParam = queryParams.length + 1;
       queryParams.push(PAGE_SIZE);
 
-      const chunkPage: { rows: ChunkRow[] } = await client.query<ChunkRow>(
-        `SELECT
+      let chunkPage: { rows: ChunkRow[] };
+      try {
+        chunkPage = await client.query<ChunkRow>(
+          `SELECT
           c.id::text || ':' || c.chunk_index AS chunk_id,
           d.id AS document_id,
           d.base_id,
@@ -264,11 +470,21 @@ export async function enqueueEnrichment(
           c.tier1_meta
         FROM chunks c
         JOIN documents d ON c.document_id = d.id
-        WHERE d.collection = $1${filterSql}${cursorClause}
+        WHERE d.collection = $1${filterSql}${textFilterClause}${cursorClause}
         ORDER BY d.id, c.chunk_index
         LIMIT $${limitParam}`,
-        queryParams
-      );
+          queryParams
+        );
+      } catch (error) {
+        if (!filterText || !useTsQuery || !isInvalidTsQueryError(error)) {
+          throw error;
+        }
+
+        useTsQuery = false;
+        lastDocumentId = null;
+        lastChunkIndex = -1;
+        continue;
+      }
 
       if (chunkPage.rows.length === 0) {
         break;
@@ -341,4 +557,65 @@ export async function enqueueEnrichment(
   }
 
   return { ok: true, enqueued };
+}
+
+export async function clearEnrichmentQueue(
+  request: ClearRequest = {},
+  collection?: string,
+): Promise<ClearResult> {
+  const col = collection || request.collection || "docs";
+  const pool = getPool();
+
+  const runQuery = async (enableTsQuery: boolean) => {
+    let filterClause = "";
+    const params: unknown[] = [col];
+    if (request.filter) {
+      const filterPattern = `%${request.filter}%`;
+      filterClause = enableTsQuery
+        ? ` AND (
+      to_tsvector('simple', concat_ws(' ',
+        t.payload->>'text',
+        t.payload->>'source',
+        t.payload->>'baseId',
+        t.payload->>'docType'
+      )) @@ websearch_to_tsquery('simple', $${params.length + 1})
+      OR t.payload->>'text' ILIKE $${params.length + 2}
+      OR t.payload->>'source' ILIKE $${params.length + 2}
+      OR t.payload->>'baseId' ILIKE $${params.length + 2}
+      OR t.payload->>'docType' ILIKE $${params.length + 2}
+    )`
+        : ` AND (
+      t.payload->>'text' ILIKE $${params.length + 1}
+      OR t.payload->>'source' ILIKE $${params.length + 1}
+      OR t.payload->>'baseId' ILIKE $${params.length + 1}
+      OR t.payload->>'docType' ILIKE $${params.length + 1}
+    )`;
+      if (enableTsQuery) {
+        params.push(request.filter, filterPattern);
+      } else {
+        params.push(filterPattern);
+      }
+    }
+
+    return pool.query(
+      `DELETE FROM task_queue t
+      WHERE t.queue = 'enrichment'
+        AND t.status IN ('pending', 'processing', 'dead')
+        AND COALESCE(t.payload->>'collection', 'docs') = $1${filterClause}
+      RETURNING t.id`,
+      params
+    );
+  };
+
+  let result;
+  try {
+    result = await runQuery(true);
+  } catch (error) {
+    if (!request.filter || !isInvalidTsQueryError(error)) {
+      throw error;
+    }
+    result = await runQuery(false);
+  }
+
+  return { ok: true, cleared: result.rowCount || 0 };
 }
