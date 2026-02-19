@@ -161,6 +161,63 @@ describe("enrichment service", () => {
       expect(result.queue).toBeDefined();
       expect(result.totals).toBeDefined();
     });
+
+    it("applies filter to queue and chunk statistics", async () => {
+      const { getPool } = await import("../db.js");
+      const mockQuery = vi.fn(async (sql: string) => {
+        if (sql.includes("FROM task_queue")) {
+          return {
+            rows: [
+              { status: "pending", count: 5 },
+            ],
+          };
+        } else if (sql.includes("FROM chunks c")) {
+          return {
+            rows: [
+              { enrichment_status: "enriched", count: 25 },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      (getPool as any).mockReturnValueOnce({
+        query: mockQuery,
+      });
+
+      const result = await getEnrichmentStats({ filter: "test filter", collection: "docs" });
+
+      expect(result.queue).toBeDefined();
+      expect(result.totals).toBeDefined();
+
+      // Verify filter was applied in SQL
+      const calls = mockQuery.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const queueQuery = calls.find((c: any) => c[0].includes("FROM task_queue"));
+      expect(queueQuery).toBeDefined();
+      expect(queueQuery![0]).toContain("websearch_to_tsquery");
+      expect(queueQuery![0]).toContain("ILIKE");
+    });
+
+    it("falls back to ILIKE-only filter when tsquery syntax is invalid", async () => {
+      const { getPool } = await import("../db.js");
+      const invalidTsQueryError = Object.assign(new Error("syntax error in tsquery"), { code: "42601" });
+      const mockQuery = vi
+        .fn()
+        .mockRejectedValueOnce(invalidTsQueryError)
+        .mockResolvedValueOnce({ rows: [{ status: "pending", count: 2 }] })
+        .mockResolvedValueOnce({ rows: [{ enrichment_status: "pending", count: 2 }] });
+
+      (getPool as any).mockReturnValueOnce({ query: mockQuery });
+
+      const result = await getEnrichmentStats({ filter: "\"unterminated", collection: "docs" });
+
+      expect(result.queue.pending).toBe(2);
+      expect(mockQuery.mock.calls.length).toBe(3);
+      const fallbackQueueSql = mockQuery.mock.calls[1][0] as string;
+      expect(fallbackQueueSql).not.toContain("websearch_to_tsquery");
+      expect(fallbackQueueSql).toContain("ILIKE");
+    });
   });
 
   describe("enqueueEnrichment", () => {

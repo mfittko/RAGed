@@ -9,6 +9,7 @@ import {
   querySchema, 
   queryDownloadFirstSchema,
   enrichmentStatusSchema, 
+  enrichmentStatsSchema,
   enrichmentEnqueueSchema, 
   enrichmentClearSchema,
   graphEntitySchema,

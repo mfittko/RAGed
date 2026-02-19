@@ -80,6 +80,17 @@ export const enrichmentStatusSchema = {
   },
 };
 
+export const enrichmentStatsSchema = {
+  querystring: {
+    type: "object" as const,
+    additionalProperties: false as const,
+    properties: {
+      collection: { type: "string" as const },
+      filter: { type: "string" as const, minLength: 1 },
+    },
+  },
+};
+
 export const enrichmentEnqueueSchema = {
   body: {
     type: "object" as const,

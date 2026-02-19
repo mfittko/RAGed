@@ -2,6 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { EnrichmentTask } from "../types.js";
 import { getPool } from "../db.js";
 
+function isInvalidTsQueryError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const maybeError = error as { code?: unknown; message?: unknown };
+  const code = typeof maybeError.code === "string" ? maybeError.code : "";
+  const message = typeof maybeError.message === "string" ? maybeError.message.toLowerCase() : "";
+
+  return code === "42601" || message.includes("syntax error in tsquery") || message.includes("websearch_to_tsquery");
+}
+
 export interface EnrichmentStatusRequest {
   baseId: string;
   collection?: string;
@@ -32,6 +44,11 @@ export interface EnrichmentStatusResult {
       chunkIndex?: number;
     };
   };
+}
+
+export interface EnrichmentStatsRequest {
+  collection?: string;
+  filter?: string;
 }
 
 export interface EnrichmentStatsResult {
@@ -350,6 +367,8 @@ export async function enqueueEnrichment(
     filterSql = " AND c.enrichment_status != 'enriched'";
   }
 
+  const filterText = request.filter;
+
   interface ChunkRow {
     chunk_id: string;
     document_id: string;
@@ -369,6 +388,51 @@ export async function enqueueEnrichment(
 
   const client = await pool.connect();
   try {
+    const buildTextFilter = (enableTsQuery: boolean): { textFilterClause: string; baseParams: unknown[] } => {
+      let textFilterClause = "";
+      const baseParams: unknown[] = [col];
+
+      if (filterText) {
+        const filterPattern = `%${filterText}%`;
+        textFilterClause = enableTsQuery
+          ? ` AND (
+      to_tsvector('simple', concat_ws(' ',
+        c.text,
+        d.source,
+        c.doc_type,
+        d.summary,
+        d.summary_short,
+        d.summary_medium,
+        d.summary_long
+      )) @@ websearch_to_tsquery('simple', $${baseParams.length + 1})
+      OR c.text ILIKE $${baseParams.length + 2}
+      OR d.source ILIKE $${baseParams.length + 2}
+      OR c.doc_type ILIKE $${baseParams.length + 2}
+      OR d.summary ILIKE $${baseParams.length + 2}
+      OR d.summary_short ILIKE $${baseParams.length + 2}
+      OR d.summary_medium ILIKE $${baseParams.length + 2}
+      OR d.summary_long ILIKE $${baseParams.length + 2}
+    )`
+          : ` AND (
+      c.text ILIKE $${baseParams.length + 1}
+      OR d.source ILIKE $${baseParams.length + 1}
+      OR c.doc_type ILIKE $${baseParams.length + 1}
+      OR d.summary ILIKE $${baseParams.length + 1}
+      OR d.summary_short ILIKE $${baseParams.length + 1}
+      OR d.summary_medium ILIKE $${baseParams.length + 1}
+      OR d.summary_long ILIKE $${baseParams.length + 1}
+    )`;
+        if (enableTsQuery) {
+          baseParams.push(filterText, filterPattern);
+        } else {
+          baseParams.push(filterPattern);
+        }
+      }
+
+      return { textFilterClause, baseParams };
+    };
+
+    let useTsQuery = true;
     while (true) {
       const queryParams: unknown[] = [col];
 
@@ -413,8 +477,10 @@ export async function enqueueEnrichment(
       const limitParam = queryParams.length + 1;
       queryParams.push(PAGE_SIZE);
 
-      const chunkPage: { rows: ChunkRow[] } = await client.query<ChunkRow>(
-        `SELECT
+      let chunkPage: { rows: ChunkRow[] };
+      try {
+        chunkPage = await client.query<ChunkRow>(
+          `SELECT
           c.id::text || ':' || c.chunk_index AS chunk_id,
           d.id AS document_id,
           d.base_id,
@@ -428,8 +494,18 @@ export async function enqueueEnrichment(
         WHERE d.collection = $1${filterSql}${fullTextFilterClause}${cursorClause}
         ORDER BY d.id, c.chunk_index
         LIMIT $${limitParam}`,
-        queryParams
-      );
+          queryParams
+        );
+      } catch (error) {
+        if (!filterText || !useTsQuery || !isInvalidTsQueryError(error)) {
+          throw error;
+        }
+
+        useTsQuery = false;
+        lastDocumentId = null;
+        lastChunkIndex = -1;
+        continue;
+      }
 
       if (chunkPage.rows.length === 0) {
         break;

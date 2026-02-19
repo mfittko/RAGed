@@ -3,10 +3,25 @@
 
 import { getPool } from "../db.js";
 
-// Retry configuration constants
-const RETRY_BASE_SECONDS = 60;
-const RETRY_BACKOFF_MULTIPLIER = 2;
-const MAX_RETRY_DELAY_SECONDS = 3600; // 1 hour
+/**
+ * Type-safe non-empty string extraction
+ */
+function getNonEmptyString(value: unknown): string | null {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Remove summary fields from tier3 metadata
+ */
+function removeTier3SummaryFields(tier3: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!tier3) return undefined;
+
+  const { summary, summary_short, summary_medium, summary_long, ...rest } = tier3;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
 
 export interface TaskClaimRequest {
   workerId?: string;
@@ -208,6 +223,19 @@ export async function submitTaskResult(taskId: string, result: TaskResultRequest
     }
 
     const documentId = docResult.rows[0].id;
+
+    // Update document summaries if any are provided
+    if (summaryShort || summaryMedium || summaryLong) {
+      await client.query(
+        `UPDATE documents SET
+          summary_short = COALESCE($1, summary_short),
+          summary_medium = COALESCE($2, summary_medium),
+          summary_long = COALESCE($3, summary_long),
+          summary = COALESCE($2, summary_medium, summary)
+        WHERE base_id = $4 AND collection = $5`,
+        [summaryShort, summaryMedium, summaryLong, baseId, result.collection]
+      );
+    }
 
     // Batch upsert entities
     if (result.entities && result.entities.length > 0) {
@@ -415,21 +443,16 @@ export async function failTask(taskId: string, failRequest: TaskFailRequest): Pr
         [failRequest.error, taskId]
       );
     } else {
-      // Retry with exponential backoff
-      const retryDelaySeconds = Math.min(
-        RETRY_BASE_SECONDS * Math.pow(RETRY_BACKOFF_MULTIPLIER, attempt - 1),
-        MAX_RETRY_DELAY_SECONDS
-      );
-
+      // Retry with 60-second delay
       await client.query(
         `UPDATE task_queue
          SET status = 'pending',
              error = $1,
-             run_after = now() + interval '1 second' * $2,
+             run_after = now() + interval '60 seconds',
              leased_by = NULL,
              lease_expires_at = NULL
-         WHERE id = $3`,
-        [failRequest.error, retryDelaySeconds, taskId]
+         WHERE id = $2`,
+        [failRequest.error, taskId]
       );
     }
 
