@@ -93,3 +93,12 @@ docs/         → Project documentation
 - Store local one-off helper scripts and scratch artifacts in `tmp/` only.
 - Keep `tmp/.keep` in the repo so the directory exists across checkouts.
 - Do not add ad-hoc temp files outside `tmp/`.
+
+## Agent Command Execution Policy
+
+- Run commands step by step when possible; avoid batching many command calls at once.
+- If complex logic is required, create or edit a script file in `tmp/` (create the folder if needed), then execute that script with explicit parameters.
+- Be overly cautious with destructive commands (for example: `rm`, `git reset`, `git clean`, force pushes, schema/data deletion).
+	- Before running a destructive command, ask for explicit user confirmation.
+	- Explain expected effects and impacted files/resources before execution.
+- Generate structured files (for example JSON/TSV) via editor/file-edit tools, not via shell redirection or inline shell generation.
