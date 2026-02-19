@@ -400,7 +400,8 @@ describe("enrichment service", () => {
       expect(result.ok).toBe(true);
       expect(result.cleared).toBe(3);
 
-      const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const firstCall = (mockQuery as any).mock.calls[0] as unknown[] | undefined;
+      const sql = typeof firstCall?.[0] === "string" ? firstCall[0] : "";
       expect(sql).toContain("DELETE FROM task_queue");
       expect(sql).toContain("websearch_to_tsquery");
       expect(sql).toContain("ILIKE");

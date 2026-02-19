@@ -167,7 +167,9 @@ describe("internal service", () => {
       expect(chunkUpdateCall![0]).toContain("- 'summary_long'");
       expect(chunkUpdateCall![0]).toContain("- '_error'");
 
-      const chunkTier3Payload = JSON.parse(chunkUpdateCall![1][1]);
+      const chunkUpdateParams = ((chunkUpdateCall as any)?.[1] as unknown[] | undefined) ?? [];
+      const chunkTier3PayloadRaw = chunkUpdateParams[1];
+      const chunkTier3Payload = JSON.parse(typeof chunkTier3PayloadRaw === "string" ? chunkTier3PayloadRaw : "{}");
       expect(chunkTier3Payload).not.toHaveProperty("summary");
       expect(chunkTier3Payload).not.toHaveProperty("summary_short");
       expect(chunkTier3Payload).not.toHaveProperty("summary_medium");
@@ -213,7 +215,8 @@ describe("internal service", () => {
       );
       expect(docUpdateCall).toBeDefined();
       // Verify summary was passed as medium
-      expect(docUpdateCall![1][1]).toBe("Fallback summary from result.summary");
+      const docUpdateParams = ((docUpdateCall as any)?.[1] as unknown[] | undefined) ?? [];
+      expect(docUpdateParams[1]).toBe("Fallback summary from result.summary");
     });
   });
 
@@ -355,7 +358,8 @@ describe("internal service", () => {
       expect(chunkUpdateCall![0]).toContain("jsonb_build_object");
       expect(chunkUpdateCall![0]).toContain("'_error'");
       expect(chunkUpdateCall![0]).toContain("'chunkIndex'");
-      expect(chunkUpdateCall![1][2]).toBe(5);
+      const chunkUpdateParams = ((chunkUpdateCall as any)?.[1] as unknown[] | undefined) ?? [];
+      expect(chunkUpdateParams[2]).toBe(5);
     });
 
     it("parses chunk index from chunkId format", async () => {
@@ -392,7 +396,8 @@ describe("internal service", () => {
       );
       expect(chunkUpdateCall).toBeDefined();
       // The third parameter should be the parsed chunk index
-      expect(chunkUpdateCall![1][2]).toBe(7);
+      const chunkUpdateParams = ((chunkUpdateCall as any)?.[1] as unknown[] | undefined) ?? [];
+      expect(chunkUpdateParams[2]).toBe(7);
     });
   });
 
