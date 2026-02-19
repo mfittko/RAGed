@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Readable } from "node:stream";
 import { buildApp } from "./server.js";
 
 // Mock the db module
@@ -33,6 +34,19 @@ vi.mock("./ollama.js", () => ({
     texts.map(() => Array(768).fill(0.1))
   ),
 }));
+
+vi.mock("./blob-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./blob-store.js")>();
+  return {
+    ...actual,
+    downloadRawBlobStream: vi.fn(async () => ({
+      stream: Readable.from([Buffer.from("blob payload")]),
+      contentLength: null,
+      contentType: null,
+    })),
+    downloadRawBlob: vi.fn(async () => Buffer.from("blob payload")),
+  };
+});
 
 describe("API integration tests", () => {
   beforeEach(() => {
@@ -475,6 +489,176 @@ describe("API integration tests", () => {
       expect(res.headers["content-type"]).toContain("application/pdf");
       expect(res.headers["content-disposition"]).toContain("report.pdf");
       expect(res.headers["x-raged-source"]).toBe("report.pdf");
+      await app.close();
+    });
+
+    it("returns 200 for empty raw_data buffer", async () => {
+      const { getPool } = await import("./db.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "empty.txt",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "text",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              raw_data: Buffer.alloc(0),
+              raw_key: null,
+              source: "empty.txt",
+              mime_type: "text/plain",
+            },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("");
+      await app.close();
+    });
+
+    it("derives safe filename from URL source with trailing slash", async () => {
+      const { getPool } = await import("./db.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "https://example.com/path/?q=1",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "pdf",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              raw_data: Buffer.from("PDF data"),
+              raw_key: null,
+              source: "https://example.com/path/?q=1",
+              mime_type: "application/pdf",
+            },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-disposition"]).toContain("filename=\"path.pdf\"");
+      await app.close();
+    });
+
+    it("streams blob-store data when raw_key is present", async () => {
+      const { getPool } = await import("./db.js");
+      const { downloadRawBlobStream } = await import("./blob-store.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "blob.doc",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "doc",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      (downloadRawBlobStream as any).mockResolvedValueOnce({
+        stream: Readable.from([Buffer.from("streamed-content")]),
+        contentLength: 16,
+        contentType: "application/octet-stream",
+      });
+
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              raw_data: null,
+              raw_key: "documents/test/raw.bin",
+              source: "blob.doc",
+              mime_type: "application/octet-stream",
+            },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("streamed-content");
+      expect(downloadRawBlobStream).toHaveBeenCalledWith("documents/test/raw.bin");
       await app.close();
     });
 

@@ -24,8 +24,9 @@ import { getEnrichmentStatus, getEnrichmentStats, enqueueEnrichment, clearEnrich
 import { listCollections } from "./services/collections.js";
 import { claimTask, submitTaskResult, failTask, recoverStaleTasks } from "./services/internal.js";
 import { getPool } from "./db.js";
-import { downloadRawBlob } from "./blob-store.js";
+import { downloadRawBlobStream } from "./blob-store.js";
 import path from "node:path";
+import type { Readable } from "node:stream";
 
 export function buildApp() {
   // Trust proxy only when explicitly enabled via env var for security
@@ -91,8 +92,23 @@ export function buildApp() {
   });
 
   function deriveFileName(source: string, mimeType: string): string {
-    const segment = source.split("/").pop() || source;
-    const sanitized = segment.replace(/[\x00-\x1f\x7f"]/g, "_");
+    let pathLike = source;
+    try {
+      const url = new URL(source);
+      if (url.pathname) {
+        pathLike = url.pathname;
+      }
+    } catch {
+      // Not a URL; treat source as plain path/identifier
+    }
+
+    const segments = pathLike.split("/").filter((segment) => segment.length > 0);
+    const candidate = segments.length > 0 ? segments[segments.length - 1] : "download";
+    let sanitized = candidate.replace(/[\x00-\x1f\x7f"]/g, "_");
+    if (sanitized.length === 0 || sanitized === "." || sanitized === "..") {
+      sanitized = "download";
+    }
+
     if (path.extname(sanitized).length > 0) {
       return sanitized;
     }
@@ -141,12 +157,13 @@ export function buildApp() {
       return reply.status(404).send({ error: `Document not found: ${baseId}` });
     }
 
-    let binaryData: Buffer;
-    if (doc.raw_data) {
-      binaryData = doc.raw_data;
+    let responseBody: Buffer | Readable;
+    if (doc.raw_data !== null) {
+      responseBody = doc.raw_data;
     } else if (doc.raw_key) {
       try {
-        binaryData = await downloadRawBlob(doc.raw_key);
+        const blob = await downloadRawBlobStream(doc.raw_key);
+        responseBody = blob.stream;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
         return reply.status(502).send({ error: `Failed to retrieve document from blob store: ${message}` });
@@ -163,7 +180,7 @@ export function buildApp() {
       .header("Content-Type", mimeType)
       .header("Content-Disposition", `attachment; filename="${fileName}"`)
       .header("X-Raged-Source", safeSource)
-      .send(binaryData);
+      .send(responseBody);
   });
 
   app.post("/query/fulltext-first", { schema: queryDownloadFirstSchema }, async (req, reply) => {
