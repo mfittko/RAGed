@@ -6,6 +6,7 @@ import { registerErrorHandler } from "./errors.js";
 import { 
   ingestSchema, 
   querySchema, 
+  queryDownloadFirstSchema,
   enrichmentStatusSchema, 
   enrichmentStatsSchema,
   enrichmentEnqueueSchema, 
@@ -20,8 +21,11 @@ import { validateIngestRequest } from "./services/ingest-validation.js";
 import { ingest } from "./services/ingest.js";
 import { query } from "./services/query.js";
 import { getEnrichmentStatus, getEnrichmentStats, enqueueEnrichment, clearEnrichmentQueue } from "./services/enrichment.js";
+import { listCollections } from "./services/collections.js";
 import { claimTask, submitTaskResult, failTask, recoverStaleTasks } from "./services/internal.js";
 import { getPool } from "./db.js";
+import { downloadRawBlob } from "./blob-store.js";
+import path from "node:path";
 
 export function buildApp() {
   // Trust proxy only when explicitly enabled via env var for security
@@ -83,6 +87,127 @@ export function buildApp() {
   app.post("/query", { schema: querySchema }, async (req, reply) => {
     const body = req.body as any;
     const result = await query(body, body.collection);
+    return reply.send(result);
+  });
+
+  function deriveFileName(source: string, mimeType: string): string {
+    const segment = source.split("/").pop() || source;
+    if (path.extname(segment).length > 0) {
+      return segment;
+    }
+    const mimeToExt: Record<string, string> = {
+      "application/pdf": ".pdf",
+      "text/html": ".html",
+      "text/plain": ".txt",
+      "text/markdown": ".md",
+      "application/json": ".json",
+      "image/png": ".png",
+      "image/jpeg": ".jpg",
+      "image/gif": ".gif",
+      "image/webp": ".webp",
+    };
+    const ext = mimeToExt[mimeType] ?? ".bin";
+    return `${segment}${ext}`;
+  }
+
+  app.post("/query/download-first", { schema: queryDownloadFirstSchema }, async (req, reply) => {
+    const body = req.body as any;
+    const queryResult = await query(body, body.collection);
+    const first = queryResult.results[0];
+    if (!first) {
+      return reply.status(404).send({ error: "No results found for query" });
+    }
+
+    const baseId = first.payload?.baseId as string | undefined;
+    if (!baseId) {
+      return reply.status(404).send({ error: "Result has no baseId" });
+    }
+
+    const col = body.collection || "docs";
+    const pool = getPool();
+    const docResult = await pool.query<{
+      raw_data: Buffer | null;
+      raw_key: string | null;
+      source: string;
+      mime_type: string | null;
+    }>(
+      `SELECT raw_data, raw_key, source, mime_type FROM documents WHERE base_id = $1 AND collection = $2 LIMIT 1`,
+      [baseId, col]
+    );
+
+    const doc = docResult.rows[0];
+    if (!doc) {
+      return reply.status(404).send({ error: `Document not found: ${baseId}` });
+    }
+
+    let binaryData: Buffer;
+    if (doc.raw_data) {
+      binaryData = doc.raw_data;
+    } else if (doc.raw_key) {
+      binaryData = await downloadRawBlob(doc.raw_key);
+    } else {
+      return reply.status(404).send({ error: "No raw data available for document" });
+    }
+
+    const mimeType = doc.mime_type || "application/octet-stream";
+    const fileName = deriveFileName(doc.source, mimeType);
+
+    return reply
+      .header("Content-Type", mimeType)
+      .header("Content-Disposition", `attachment; filename="${fileName}"`)
+      .header("X-Raged-Source", doc.source)
+      .send(binaryData);
+  });
+
+  app.post("/query/fulltext-first", { schema: queryDownloadFirstSchema }, async (req, reply) => {
+    const body = req.body as any;
+    const queryResult = await query(body, body.collection);
+    const first = queryResult.results[0];
+    if (!first) {
+      return reply.status(404).send({ error: "No results found for query" });
+    }
+
+    const baseId = first.payload?.baseId as string | undefined;
+    if (!baseId) {
+      return reply.status(404).send({ error: "Result has no baseId" });
+    }
+
+    const col = body.collection || "docs";
+    const pool = getPool();
+    const chunksResult = await pool.query<{
+      text: string;
+      source: string;
+    }>(
+      `SELECT c.text, d.source
+      FROM documents d
+      JOIN chunks c ON c.document_id = d.id
+      WHERE d.base_id = $1 AND d.collection = $2
+      ORDER BY c.chunk_index`,
+      [baseId, col]
+    );
+
+    if (chunksResult.rows.length === 0) {
+      return reply.status(404).send({ error: `No chunks found for document: ${baseId}` });
+    }
+
+    const source = chunksResult.rows[0]?.source || baseId;
+    const segment = source.split("/").pop() || source;
+    const baseName = path.basename(segment, path.extname(segment));
+    const fullText = chunksResult.rows
+      .map((r) => r.text)
+      .filter((t) => t && t.trim().length > 0)
+      .join("\n\n");
+
+    return reply
+      .header("Content-Type", "text/plain; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${baseName}.txt"`)
+      .header("X-Raged-Source", source)
+      .send(fullText);
+  });
+
+  // Collections endpoint
+  app.get("/collections", async (_req, reply) => {
+    const result = await listCollections();
     return reply.send(result);
   });
 

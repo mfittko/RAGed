@@ -136,6 +136,11 @@ describe("API integration tests", () => {
               tier1_meta: {},
               tier2_meta: null,
               tier3_meta: null,
+              doc_summary: null,
+              doc_summary_short: null,
+              doc_summary_medium: null,
+              doc_summary_long: null,
+              payload_checksum: null,
             },
           ],
         })),
@@ -356,6 +361,120 @@ describe("API integration tests", () => {
       });
 
       expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+  });
+
+  describe("GET /collections", () => {
+    it("returns collection stats", async () => {
+      const { getPool } = await import("./db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              collection: "docs",
+              document_count: 5,
+              chunk_count: 20,
+              enriched_chunk_count: 15,
+              last_seen_at: "2024-01-01T00:00:00.000Z",
+            },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/collections",
+        headers: {
+          authorization: "Bearer test-token",
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      expect(Array.isArray(body.collections)).toBe(true);
+      expect(body.collections[0].collection).toBe("docs");
+      expect(body.collections[0].documentCount).toBe(5);
+      await app.close();
+    });
+  });
+
+  describe("POST /query/fulltext-first", () => {
+    it("returns 404 when no results found", async () => {
+      const { getPool } = await import("./db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [] })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/fulltext-first",
+        headers: {
+          authorization: "Bearer test-token",
+        },
+        payload: { query: "nothing matches" },
+      });
+
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("returns concatenated text when document found", async () => {
+      const { getPool } = await import("./db.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "test.txt",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "text",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      // First getPool() call: for the query service (vector search)
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      // Second getPool() call: for the fulltext chunks query in server route
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            { text: "chunk one", source: "test.txt" },
+            { text: "chunk two", source: "test.txt" },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/fulltext-first",
+        headers: {
+          authorization: "Bearer test-token",
+        },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toContain("text/plain");
+      expect(res.body).toContain("chunk one");
+      expect(res.body).toContain("chunk two");
       await app.close();
     });
   });

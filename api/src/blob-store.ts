@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import path from "node:path";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 interface BlobStoreConfig {
   endpoint: string;
@@ -138,4 +139,41 @@ export async function uploadRawBlob(input: RawUploadInput): Promise<RawUploadRes
     bytes,
     mimeType,
   };
+}
+
+export async function downloadRawBlob(key: string): Promise<Buffer> {
+  const config = getBlobStoreConfig();
+  if (!config) {
+    throw new Error("blob store is not configured");
+  }
+
+  const client = getS3Client(config);
+  const response = await client.send(
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+    }),
+  );
+
+  const body = response.Body;
+  if (!body) {
+    throw new Error(`Empty response body for key: ${key}`);
+  }
+
+  // Strategy 1: AWS SDK v3 modern method
+  if (typeof (body as { transformToByteArray?: unknown }).transformToByteArray === "function") {
+    const bytes = await (body as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray();
+    return Buffer.from(bytes);
+  }
+
+  // Strategy 2: Readable stream iteration
+  if (body instanceof Readable) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  throw new Error("Unsupported response body type from blob store");
 }
