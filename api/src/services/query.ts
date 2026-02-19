@@ -30,6 +30,7 @@ export interface QueryResultItem {
   text?: string;
   payload?: Record<string, unknown>;
 }
+
 export interface GraphData {
   entities: Array<{
     name: string;

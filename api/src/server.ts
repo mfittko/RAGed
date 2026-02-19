@@ -92,8 +92,9 @@ export function buildApp() {
 
   function deriveFileName(source: string, mimeType: string): string {
     const segment = source.split("/").pop() || source;
-    if (path.extname(segment).length > 0) {
-      return segment;
+    const sanitized = segment.replace(/[\x00-\x1f\x7f"]/g, "_");
+    if (path.extname(sanitized).length > 0) {
+      return sanitized;
     }
     const mimeToExt: Record<string, string> = {
       "application/pdf": ".pdf",
@@ -107,7 +108,7 @@ export function buildApp() {
       "image/webp": ".webp",
     };
     const ext = mimeToExt[mimeType] ?? ".bin";
-    return `${segment}${ext}`;
+    return `${sanitized}${ext}`;
   }
 
   app.post("/query/download-first", { schema: queryDownloadFirstSchema }, async (req, reply) => {
@@ -144,18 +145,24 @@ export function buildApp() {
     if (doc.raw_data) {
       binaryData = doc.raw_data;
     } else if (doc.raw_key) {
-      binaryData = await downloadRawBlob(doc.raw_key);
+      try {
+        binaryData = await downloadRawBlob(doc.raw_key);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        return reply.status(502).send({ error: `Failed to retrieve document from blob store: ${message}` });
+      }
     } else {
       return reply.status(404).send({ error: "No raw data available for document" });
     }
 
     const mimeType = doc.mime_type || "application/octet-stream";
     const fileName = deriveFileName(doc.source, mimeType);
+    const safeSource = doc.source.replace(/[\x00-\x1f\x7f]/g, "_");
 
     return reply
       .header("Content-Type", mimeType)
       .header("Content-Disposition", `attachment; filename="${fileName}"`)
-      .header("X-Raged-Source", doc.source)
+      .header("X-Raged-Source", safeSource)
       .send(binaryData);
   });
 
@@ -192,16 +199,17 @@ export function buildApp() {
 
     const source = chunksResult.rows[0]?.source || baseId;
     const segment = source.split("/").pop() || source;
-    const baseName = path.basename(segment, path.extname(segment));
+    const baseName = path.basename(segment.replace(/[\x00-\x1f\x7f"]/g, "_"), path.extname(segment));
     const fullText = chunksResult.rows
       .map((r) => r.text)
       .filter((t) => t && t.trim().length > 0)
       .join("\n\n");
+    const safeSource = source.replace(/[\x00-\x1f\x7f]/g, "_");
 
     return reply
       .header("Content-Type", "text/plain; charset=utf-8")
       .header("Content-Disposition", `attachment; filename="${baseName}.txt"`)
-      .header("X-Raged-Source", source)
+      .header("X-Raged-Source", safeSource)
       .send(fullText);
   });
 

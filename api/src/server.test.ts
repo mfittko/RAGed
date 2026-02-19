@@ -401,6 +401,130 @@ describe("API integration tests", () => {
     });
   });
 
+  describe("POST /query/download-first", () => {
+    it("returns 404 when no results found", async () => {
+      const { getPool } = await import("./db.js");
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [] })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "nothing matches" },
+      });
+
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("returns binary data when document found with raw_data", async () => {
+      const { getPool } = await import("./db.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "report.pdf",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "pdf",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      // First getPool(): vector search
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      // Second getPool(): document lookup
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [
+            {
+              raw_data: Buffer.from("PDF binary content"),
+              raw_key: null,
+              source: "report.pdf",
+              mime_type: "application/pdf",
+            },
+          ],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/pdf");
+      expect(res.headers["content-disposition"]).toContain("report.pdf");
+      expect(res.headers["x-raged-source"]).toBe("report.pdf");
+      await app.close();
+    });
+
+    it("returns 404 when document has no raw data", async () => {
+      const { getPool } = await import("./db.js");
+      const chunkRow = {
+        chunk_id: "test-id:0",
+        distance: 0.1,
+        text: "hello world",
+        source: "doc.txt",
+        chunk_index: 0,
+        base_id: "test-base-id",
+        doc_type: "text",
+        repo_id: null,
+        repo_url: null,
+        path: null,
+        lang: null,
+        item_url: null,
+        tier1_meta: {},
+        tier2_meta: null,
+        tier3_meta: null,
+        doc_summary: null,
+        doc_summary_short: null,
+        doc_summary_medium: null,
+        doc_summary_long: null,
+        payload_checksum: null,
+      };
+
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({ rows: [chunkRow] })),
+      });
+      (getPool as any).mockReturnValueOnce({
+        query: vi.fn(async () => ({
+          rows: [{ raw_data: null, raw_key: null, source: "doc.txt", mime_type: null }],
+        })),
+      });
+
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query/download-first",
+        headers: { authorization: "Bearer test-token" },
+        payload: { query: "hello world" },
+      });
+
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+  });
+
   describe("POST /query/fulltext-first", () => {
     it("returns 404 when no results found", async () => {
       const { getPool } = await import("./db.js");
