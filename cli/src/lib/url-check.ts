@@ -93,42 +93,59 @@ async function askOpenAiMeaningful(
     snippet,
   ].join("\n");
 
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-      max_tokens: 150,
-      response_format: { type: "json_object" },
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`OpenAI API error: ${res.status} ${text}`);
-  }
-
-  const data = (await res.json()) as {
-    choices: Array<{ message: { content: string } }>;
-  };
-
-  const raw = data.choices?.[0]?.message?.content || "";
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const parsed = JSON.parse(raw) as { meaningful: boolean; reason: string };
-    return {
-      meaningful: Boolean(parsed.meaningful),
-      reason: parsed.reason || "no reason given",
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
+        max_tokens: 150,
+        response_format: { type: "json_object" },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`OpenAI API error: ${res.status} ${text}`);
+    }
+
+    const data = (await res.json()) as {
+      choices: Array<{ message: { content: string } }>;
     };
-  } catch {
-    // If OpenAI response isn't valid JSON, default to meaningful (don't block ingestion)
-    logger.warn(`[url-check] Could not parse OpenAI response for ${url}, defaulting to meaningful`);
-    return { meaningful: true, reason: "parse error — defaulting to pass" };
+
+    const raw = data.choices?.[0]?.message?.content || "";
+
+    try {
+      const parsed = JSON.parse(raw) as { meaningful: boolean; reason: string };
+      return {
+        meaningful: Boolean(parsed.meaningful),
+        reason: parsed.reason || "no reason given",
+      };
+    } catch {
+      // If OpenAI response isn't valid JSON, default to meaningful (don't block ingestion)
+      logger.warn(`[url-check] Could not parse OpenAI response for ${url}, defaulting to meaningful`);
+      return { meaningful: true, reason: "parse error — defaulting to pass" };
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      logger.warn(
+        `[url-check] OpenAI request timed out for ${url} after ${FETCH_TIMEOUT_MS}ms, defaulting to meaningful`
+      );
+      return { meaningful: true, reason: "timeout — defaulting to pass" };
+    }
+
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

@@ -485,6 +485,40 @@ describe("ingest command", () => {
     globalThis.fetch = fetchMock;
     await fs.rm(tempDir, { recursive: true, force: true });
   });
+
+  it("should match root and nested files for **/*.tmp ignore pattern", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "raged-ingest-test-"));
+    const keepPdf = path.join(tempDir, "keep.pdf");
+    const rootTmp = path.join(tempDir, "root.tmp");
+    const nestedDir = path.join(tempDir, "nested");
+    const nestedTmp = path.join(nestedDir, "child.tmp");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(keepPdf, "placeholder");
+    await fs.writeFile(rootTmp, "placeholder");
+    await fs.writeFile(nestedTmp, "placeholder");
+
+    const readSpy = vi.spyOn(utils, "readFileContent").mockResolvedValue({ text: "content" });
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0].source).toBe("keep.pdf");
+
+      return new Response(JSON.stringify({ upserted: 1, errors: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdIngest({ dir: tempDir, docType: "pdf", ignore: "**/*.tmp" });
+
+    expect(readSpy).toHaveBeenCalledTimes(1);
+    expect(readSpy).toHaveBeenCalledWith(keepPdf, "pdf");
+
+    readSpy.mockRestore();
+    globalThis.fetch = fetchMock;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
 });
 
 describe("ingest command", () => {

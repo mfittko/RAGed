@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { checkUrl, checkUrls } from "./url-check.js";
 
 describe("url-check", () => {
@@ -250,5 +250,46 @@ describe("url-check", () => {
     const results = await checkUrls(urls, "test-key", "https://api.openai.com/v1", "gpt-4o-mini", 2);
 
     expect(results.map((item) => item.url)).toEqual(urls);
+  });
+
+  it("should default to meaningful when OpenAI request times out", async () => {
+    vi.useFakeTimers();
+
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url instanceof Request ? url.url : url.toString();
+
+      if (!urlStr.includes("api.openai.com")) {
+        return new Response(
+          "<html><body><p>This page has enough content to trigger OpenAI relevance check in tests.</p></body></html>",
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        );
+      }
+
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const abortError = new Error("aborted");
+        abortError.name = "AbortError";
+
+        if (signal?.aborted) {
+          reject(abortError);
+          return;
+        }
+
+        signal?.addEventListener("abort", () => reject(abortError), { once: true });
+      });
+    }) as typeof globalThis.fetch;
+
+    const resultPromise = checkUrl("https://example.com/stall", "test-key");
+    await vi.advanceTimersByTimeAsync(10_050);
+
+    const result = await resultPromise;
+    expect(result.reachable).toBe(true);
+    expect(result.meaningful).toBe(true);
+    expect(result.reason).toContain("timeout");
+
+    vi.useRealTimers();
   });
 });

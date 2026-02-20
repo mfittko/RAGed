@@ -64,8 +64,15 @@ function globPatternToRegExp(pattern: string): RegExp {
   for (let index = 0; index < pattern.length; index++) {
     const char = pattern[index];
     const next = pattern[index + 1];
+    const nextAfter = pattern[index + 2];
 
     if (char === "*" && next === "*") {
+      if (nextAfter === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+        continue;
+      }
+
       expression += ".*";
       index += 1;
       continue;
