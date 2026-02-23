@@ -27,4 +27,3 @@ class OllamaAdapter(OpenAIAdapter):
             base_url=_normalize_ollama_base_url(OLLAMA_URL),
             api_key=api_key,
         )
-

@@ -127,9 +127,7 @@ Respond in JSON format."""
                 ],
             }
         ]
-        _empty = ImageDescription(
-            description="", detected_objects=[], ocr_text="", image_type=""
-        )
+        _empty = ImageDescription(description="", detected_objects=[], ocr_text="", image_type="")
 
         try:
             response = await self.client.chat.completions.create(
@@ -199,9 +197,7 @@ Respond in JSON format."""
             if result is not None:
                 return result
         except Exception as e:
-            logger.warning(
-                f"JSON mode extraction failed ({e}); retrying without response_format"
-            )
+            logger.warning(f"JSON mode extraction failed ({e}); retrying without response_format")
 
         # Fallback: retry without response_format
         try:

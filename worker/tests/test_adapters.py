@@ -141,9 +141,7 @@ async def test_openai_adapter_json_mode_fallback():
     fallback_response = _make_openai_response('{"summary": "fallback result"}')
 
     # First call (JSON mode) raises; second call (fallback) succeeds
-    create_mock = AsyncMock(
-        side_effect=[Exception("json_object not supported"), fallback_response]
-    )
+    create_mock = AsyncMock(side_effect=[Exception("json_object not supported"), fallback_response])
 
     with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
@@ -212,8 +210,10 @@ def test_ollama_url_normalization():
 
 def test_ollama_adapter_uses_ollama_api_key():
     """Test OllamaAdapter uses OLLAMA_API_KEY when set."""
-    with patch("src.adapters.ollama.OLLAMA_API_KEY", "ollama-secret"), \
-         patch("src.adapters.ollama.OPENAI_API_KEY", "openai-key"):
+    with (
+        patch("src.adapters.ollama.OLLAMA_API_KEY", "ollama-secret"),
+        patch("src.adapters.ollama.OPENAI_API_KEY", "openai-key"),
+    ):
         adapter = OllamaAdapter()
         # The api_key passed to AsyncOpenAI should be the ollama key
         assert adapter.client.api_key == "ollama-secret"
