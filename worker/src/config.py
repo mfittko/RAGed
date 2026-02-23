@@ -15,6 +15,10 @@ EXTRACTOR_MODEL_FAST = os.environ.get("EXTRACTOR_MODEL_FAST", "gpt-4.1-mini")
 EXTRACTOR_MODEL_CAPABLE = os.environ.get("EXTRACTOR_MODEL_CAPABLE", "gpt-4.1-mini")
 EXTRACTOR_MODEL_VISION = os.environ.get("EXTRACTOR_MODEL_VISION", "gpt-4.1-mini")
 
+# Anthropic-specific model defaults (Claude models)
+ANTHROPIC_MODEL_FAST = os.environ.get("ANTHROPIC_MODEL_FAST", "claude-3-5-haiku-20241022")
+ANTHROPIC_MODEL_CAPABLE = os.environ.get("ANTHROPIC_MODEL_CAPABLE", "claude-3-5-sonnet-20241022")
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 

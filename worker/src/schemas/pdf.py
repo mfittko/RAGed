@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 class Section(BaseModel):
     """A section from a PDF document."""
 
-    title: str
-    summary: str
+    title: str = ""
+    summary: str = ""
 
 
 class InvoiceLineItem(BaseModel):

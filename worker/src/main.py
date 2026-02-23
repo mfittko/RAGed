@@ -4,7 +4,14 @@ import os
 import time
 
 from src import api_client
-from src.config import EXTRACTOR_PROVIDER, MAX_RETRIES, OPENAI_API_KEY, OPENAI_BASE_URL, QUEUE_NAME, WORKER_CONCURRENCY
+from src.config import (
+    EXTRACTOR_PROVIDER,
+    MAX_RETRIES,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    QUEUE_NAME,
+    WORKER_CONCURRENCY,
+)
 from src.pipeline import process_task
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")

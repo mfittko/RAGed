@@ -26,7 +26,8 @@ async def test_ollama_adapter_extract_metadata():
 
     mock_response = _make_openai_response('{"summary": "Test summary", "complexity": "low"}')
 
-    with patch.object(adapter.client.chat.completions, "create", new=AsyncMock(return_value=mock_response)):
+    create_mock = AsyncMock(return_value=mock_response)
+    with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         schema = {
             "type": "object",
             "properties": {
@@ -52,7 +53,8 @@ async def test_ollama_adapter_extract_entities():
     )
     mock_response = _make_openai_response(content)
 
-    with patch.object(adapter.client.chat.completions, "create", new=AsyncMock(return_value=mock_response)):
+    create_mock = AsyncMock(return_value=mock_response)
+    with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         result = await adapter.extract_entities("test text")
 
         assert "entities" in result
@@ -67,7 +69,8 @@ async def test_ollama_adapter_is_available():
 
     mock_response = _make_openai_response("ok")
 
-    with patch.object(adapter.client.chat.completions, "create", new=AsyncMock(return_value=mock_response)):
+    create_mock = AsyncMock(return_value=mock_response)
+    with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         result = await adapter.is_available()
 
         assert result is True
@@ -99,7 +102,8 @@ async def test_ollama_adapter_describe_image():
     )
     mock_response = _make_openai_response(content)
 
-    with patch.object(adapter.client.chat.completions, "create", new=AsyncMock(return_value=mock_response)):
+    create_mock = AsyncMock(return_value=mock_response)
+    with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         result = await adapter.describe_image("base64imagedata", "test context")
 
         assert isinstance(result, ImageDescription)
@@ -159,7 +163,8 @@ async def test_ollama_adapter_handles_invalid_json():
 
     mock_response = _make_openai_response("invalid json{{{")
 
-    with patch.object(adapter.client.chat.completions, "create", new=AsyncMock(return_value=mock_response)):
+    create_mock = AsyncMock(return_value=mock_response)
+    with patch.object(adapter.client.chat.completions, "create", new=create_mock):
         schema = {"type": "object", "properties": {"summary": {"type": "string"}}}
 
         result = await adapter.extract_metadata("test", "code", schema)

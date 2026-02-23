@@ -40,8 +40,8 @@ def _normalize_tier3_metadata(tier3_meta: dict) -> dict:
     tier3_meta["summary_short"] = s_short
     tier3_meta["summary_medium"] = s_medium
     tier3_meta["summary_long"] = s_long
-    # Keep backward-compatible summary field
-    if not s_legacy:
+    # Keep backward-compatible summary field only when we have non-empty summaries
+    if not s_legacy and (s_short or s_medium or s_long):
         tier3_meta["summary"] = s_medium
 
     # --- Invoice normalization ---
@@ -58,19 +58,17 @@ def _normalize_tier3_metadata(tier3_meta: dict) -> dict:
         inv_date = invoice.get("invoice_date") or ""
         final_identifier = invoice.get("invoice_identifier") or invoice.get("invoice_number") or ""
 
-        # Append invoice date to summaries if not already present
-        if inv_date:
-            for key in ("summary_short", "summary_medium", "summary_long", "summary"):
-                val = tier3_meta.get(key) or ""
-                if val and inv_date not in val:
-                    tier3_meta[key] = f"{val} ({inv_date})"
-
-        # Append invoice identifier to summaries if not already present
-        if final_identifier:
-            for key in ("summary_short", "summary_medium", "summary_long", "summary"):
-                val = tier3_meta.get(key) or ""
-                if val and final_identifier not in val:
-                    tier3_meta[key] = f"{val} [{final_identifier}]"
+        # Append invoice date and identifier to summaries if not already present
+        for key in ("summary_short", "summary_medium", "summary_long", "summary"):
+            val = tier3_meta.get(key) or ""
+            if not val:
+                continue
+            new_val = val
+            if inv_date and inv_date not in new_val:
+                new_val = f"{new_val} ({inv_date})"
+            if final_identifier and final_identifier not in new_val:
+                new_val = f"{new_val} [{final_identifier}]"
+            tier3_meta[key] = new_val
 
     # --- Keywords normalization ---
     keywords = tier3_meta.get("keywords")

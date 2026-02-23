@@ -115,34 +115,53 @@ For each relationship:
 
 Respond in JSON format."""
 
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                    },
+                ],
+            }
+        ]
+        _empty = ImageDescription(
+            description="", detected_objects=[], ocr_text="", image_type=""
+        )
+
         try:
             response = await self.client.chat.completions.create(
                 model=self.vision_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
-                            },
-                        ],
-                    }
-                ],
+                messages=messages,
                 max_tokens=self.max_tokens,
                 response_format={"type": "json_object"},
             )
-
             content = response.choices[0].message.content
             result = self._parse_json_content(content)
-            if result is None:
-                return ImageDescription(description="", detected_objects=[], ocr_text="", image_type="")
-            return ImageDescription(**result)
-
+            if result is not None:
+                return ImageDescription(**result)
         except Exception as e:
-            logger.error(f"Error in image description: {e}")
-            return ImageDescription(description="", detected_objects=[], ocr_text="", image_type="")
+            logger.warning(
+                f"Image description with JSON mode failed ({e}); retrying without response_format"
+            )
+
+        # Fallback: retry without response_format
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.vision_model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+            )
+            content = response.choices[0].message.content
+            result = self._parse_json_content(content)
+            if result is not None:
+                return ImageDescription(**result)
+        except Exception as e:
+            logger.error(f"Error in image description (fallback): {e}")
+
+        return _empty
 
     async def is_available(self) -> bool:
         """Check if OpenAI API is available."""
@@ -232,12 +251,16 @@ Respond in JSON format."""
             pass
 
         # Stage 2: fenced markdown block
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
         if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
+            fenced_content = match.group(1).strip()
+            start = fenced_content.find("{")
+            end = fenced_content.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(fenced_content[start : end + 1])
+                except json.JSONDecodeError:
+                    pass
 
         # Stage 3: first { to last }
         start = stripped.find("{")
