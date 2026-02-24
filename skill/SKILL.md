@@ -46,7 +46,7 @@ Content types: source code, markdown docs, blog articles, email threads, PDFs, i
 Before running queries or indexing, verify raged is reachable with a lightweight CLI call:
 
 ```bash
-raged query --q "health check" --topK 1 --api "$RAGED_URL"
+raged collections --api "$RAGED_URL"
 ```
 
 If the health check fails, remind the user to start the stack:
