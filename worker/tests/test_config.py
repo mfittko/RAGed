@@ -56,3 +56,25 @@ def test_invalid_provider_raises_value_error(monkeypatch):
 
     with pytest.raises(ValueError, match="Invalid EXTRACTOR_PROVIDER"):
         resolve_extractor_provider()
+
+
+def test_whitespace_only_openai_key_falls_back_to_ollama(monkeypatch):
+    """Whitespace-only OPENAI_API_KEY is treated as absent; falls back to ollama."""
+    monkeypatch.delenv("EXTRACTOR_PROVIDER", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from src.config import resolve_extractor_provider
+
+    assert resolve_extractor_provider() == "ollama"
+
+
+def test_whitespace_only_anthropic_key_falls_back_to_ollama(monkeypatch):
+    """Whitespace-only ANTHROPIC_API_KEY is treated as absent; falls back to ollama."""
+    monkeypatch.delenv("EXTRACTOR_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "  \t  ")
+
+    from src.config import resolve_extractor_provider
+
+    assert resolve_extractor_provider() == "ollama"

@@ -36,9 +36,9 @@ def resolve_extractor_provider() -> str:
     if raw in ("ollama", "openai", "anthropic"):
         return raw
     if raw == "auto":
-        if os.environ.get("OPENAI_API_KEY"):
+        if (os.environ.get("OPENAI_API_KEY") or "").strip():
             return "openai"
-        if os.environ.get("ANTHROPIC_API_KEY"):
+        if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
             return "anthropic"
         return "ollama"
     raise ValueError(f"Invalid EXTRACTOR_PROVIDER: {raw}")
