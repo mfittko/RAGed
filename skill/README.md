@@ -43,7 +43,7 @@ Set `RAGED_TOKEN` only if your raged instance has `RAGED_API_TOKEN` configured.
 ## Prerequisites
 
 1. A running raged instance: `docker compose up -d` (from the raged repo)
-2. `curl` on PATH
+2. `node` and `npm` on PATH
 3. The Ollama embedding model pulled: `curl http://localhost:11434/api/pull -d '{"name":"nomic-embed-text"}'`
 
 ## Verify
