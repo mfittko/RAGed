@@ -247,6 +247,24 @@ describe("API integration tests", () => {
       await app.close();
     });
 
+    it("returns 400 for invalid strategy value", async () => {
+      const app = buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/query",
+        headers: {
+          authorization: "******",
+        },
+        payload: {
+          query: "test query",
+          strategy: "invalid",
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("accepts graph parameter with valid options", async () => {
       const { getPool } = await import("./db.js");
       (getPool as any).mockReturnValueOnce({
