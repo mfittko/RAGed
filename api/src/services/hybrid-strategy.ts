@@ -500,7 +500,7 @@ export async function hybridGraphFlow(
 
   let entityDocs: EntityDocument[] = [];
   if (graphEntityIds.length > 0) {
-    entityDocs = await backend.getEntityDocuments(graphEntityIds, candidateLimit);
+    entityDocs = await backend.getEntityDocuments(graphEntityIds, candidateLimit, col);
   }
 
   // Build graph result for response (documents omitted — they appear in results[])
@@ -557,10 +557,11 @@ export async function hybridGraphFlow(
      FROM chunks c
      JOIN documents d ON c.document_id = d.id
      WHERE c.document_id = ANY($3::uuid[])
+       AND d.collection = $4
        AND c.embedding IS NOT NULL
      ORDER BY c.embedding <=> $2::vector
      LIMIT $1`,
-    [candidateLimit, JSON.stringify(vector), connectedDocIds],
+    [candidateLimit, JSON.stringify(vector), connectedDocIds, col],
   );
 
   // -------------------------------------------------------------------------

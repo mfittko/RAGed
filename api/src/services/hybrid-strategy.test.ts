@@ -340,6 +340,12 @@ describe("hybridGraphFlow", () => {
     await hybridGraphFlow(baseRequest, backend);
 
     expect(embed).toHaveBeenCalledTimes(1);
+    // collection must be passed to constrain entity-document lookup to this collection
+    expect(backend.getEntityDocuments).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      baseRequest.collection,
+    );
   });
 
   it("happy path: returns merged results with graph field populated", async () => {
@@ -474,8 +480,30 @@ describe("hybridGraphFlow", () => {
       ),
     });
 
-    const result = await hybridGraphFlow({ ...baseRequest, topK: 5 }, backend);
+    const result = await hybridGraphFlow(baseRequest, backend);
     expect(result.results.length).toBeLessThanOrEqual(5);
+  });
+
+  it("rerank SQL is scoped to the request collection (no cross-collection leakage)", async () => {
+    const { getPool } = await import("../db.js");
+    const queryMock = vi.fn()
+      .mockResolvedValueOnce({ rows: [seedRow] })  // seed search
+      .mockResolvedValueOnce({ rows: [graphRow] }); // rerank
+    (getPool as ReturnType<typeof vi.fn>).mockReturnValueOnce({ query: queryMock });
+
+    const backend = makeBackend({
+      getEntityDocuments: vi.fn(async (): Promise<EntityDocument[]> => [
+        { documentId: "graph-doc-uuid", source: "src.txt", entityName: "EntityA", mentionCount: 3 },
+      ]),
+    });
+
+    await hybridGraphFlow(baseRequest, backend);
+
+    // The second pool.query() call is the rerank query — it must include d.collection = $4
+    const [rerankSql, rerankParams] = queryMock.mock.calls[1] as [string, unknown[]];
+    expect(rerankSql).toContain("d.collection = $4");
+    // The 4th param (index 3) must be the collection name
+    expect(rerankParams[3]).toBe(baseRequest.collection);
   });
 });
 
