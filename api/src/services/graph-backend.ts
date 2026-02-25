@@ -9,6 +9,8 @@ export interface ResolvedEntity {
   type: string;
   description?: string;
   mentionCount?: number;
+  /** The original requested name that resolved to this entity (may differ in casing or via prefix fallback). */
+  requestedName: string;
 }
 
 export interface TraversalEntity {

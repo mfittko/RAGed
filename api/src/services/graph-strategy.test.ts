@@ -41,7 +41,7 @@ const defaultTraversalResult: TraversalResult = {
 function makeBackend(overrides: Partial<GraphBackend> = {}): GraphBackend {
   return {
     resolveEntities: vi.fn(async (names: string[]) =>
-      names.map((n) => ({ id: `id-${n}`, name: n, type: "service" })),
+      names.map((n) => ({ id: `id-${n}`, name: n, type: "service", requestedName: n })),
     ),
     traverse: vi.fn(async () => defaultTraversalResult),
     getEntityDocuments: vi.fn(async () => []),
@@ -125,7 +125,7 @@ describe("executeGraphStrategy", () => {
     it("D3: traverses with partial resolution, adds warnings for unresolved", async () => {
       const backend = makeBackend({
         resolveEntities: vi.fn(async () => [
-          { id: "id-EntityA", name: "EntityA", type: "service" },
+          { id: "id-EntityA", name: "EntityA", type: "service", requestedName: "EntityA" },
         ] as ResolvedEntity[]),
       });
       const results = [makeResult(["EntityA", "UnknownB"])];
@@ -136,6 +136,20 @@ describe("executeGraphStrategy", () => {
         expect.any(Object),
       );
       expect(result!.meta.warnings.some((w: string) => w.includes("UnknownB"))).toBe(true);
+    });
+
+    it("D3: prefix-resolved entity does not produce a spurious warning", async () => {
+      // "Auth" requested, "AuthService" resolved via prefix fallback → requestedName="Auth"
+      const backend = makeBackend({
+        resolveEntities: vi.fn(async () => [
+          { id: "id-AuthService", name: "AuthService", type: "service", requestedName: "Auth" },
+        ] as ResolvedEntity[]),
+      });
+      const results = [makeResult(["Auth"])];
+      const result = await executeGraphStrategy({}, results, backend);
+      expect(result).toBeDefined();
+      // No warning should be emitted for "Auth" since it resolved via prefix to "AuthService"
+      expect(result!.meta.warnings.some((w: string) => w.includes("Auth"))).toBe(false);
     });
 
     it("D4: seeds only when no relationships", async () => {

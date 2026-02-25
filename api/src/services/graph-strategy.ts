@@ -98,10 +98,10 @@ export async function executeGraphStrategy(
     return undefined;
   }
 
-  // Collect warnings for unresolved names
-  const resolvedLower = new Set(resolvedEntities.map((e) => e.name.toLowerCase()));
+  // Collect warnings for unresolved names using requestedName to handle prefix-resolved entities
+  const resolvedRequestedLower = new Set(resolvedEntities.map((e) => e.requestedName.toLowerCase()));
   for (const name of seedNames) {
-    if (!resolvedLower.has(name.toLowerCase())) {
+    if (!resolvedRequestedLower.has(name.toLowerCase())) {
       warnings.push(`Entity not found: "${name}"`);
     }
   }

@@ -14,49 +14,55 @@ import type {
 type Pool = pg.Pool;
 
 function constructPaths(
-  entities: Array<TraversalEntity & { pathNames: string[] }>,
+  entities: Array<TraversalEntity & { pathNames: string[]; pathRelTypes: string[] }>,
   relationships: Edge[],
 ): EntityPath[] {
   if (entities.length === 0) return [];
 
-  // Build bidirectional edge lookup: "A:B" -> type
-  const edgeLookup = new Map<string, string>();
+  // Build a directional edge lookup (fallback for edges not covered by CTE path): "A:B" -> string[]
+  const edgeLookup = new Map<string, string[]>();
   for (const rel of relationships) {
-    edgeLookup.set(`${rel.source}:${rel.target}`, rel.type);
-    edgeLookup.set(`${rel.target}:${rel.source}`, rel.type);
+    const fwd = `${rel.source}:${rel.target}`;
+    const bwd = `${rel.target}:${rel.source}`;
+    if (!edgeLookup.has(fwd)) edgeLookup.set(fwd, []);
+    edgeLookup.get(fwd)!.push(rel.type);
+    if (!edgeLookup.has(bwd)) edgeLookup.set(bwd, []);
+    edgeLookup.get(bwd)!.push(rel.type);
   }
 
-  const allPaths = entities.map((e) => e.pathNames);
-
   // Leaf: no other path starts with this path as a strict prefix
-  const leafPaths = allPaths.filter(
-    (pathA) =>
-      !allPaths.some(
-        (pathB) =>
-          pathB.length > pathA.length &&
-          pathB.slice(0, pathA.length).every((name, i) => name === pathA[i]),
+  const leafEntities = entities.filter(
+    (e) =>
+      !entities.some(
+        (other) =>
+          other.pathNames.length > e.pathNames.length &&
+          other.pathNames.slice(0, e.pathNames.length).every((name, i) => name === e.pathNames[i]),
       ),
   );
 
   // Deduplicate leaf paths by value equality
   const seen = new Set<string>();
-  const uniqueLeafPaths = leafPaths.filter((path) => {
-    const key = path.join("\x00");
+  const uniqueLeafEntities = leafEntities.filter((e) => {
+    const key = e.pathNames.join("\x00");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  return uniqueLeafPaths.map((pathNames) => {
+  return uniqueLeafEntities.map((e) => {
+    const pathNames = e.pathNames;
+    // pathRelTypes from CTE has length = pathNames.length - 1 (one per edge in the path)
     const edgeTypes: string[] = [];
     for (let i = 0; i < pathNames.length - 1; i++) {
-      const s = pathNames[i];
-      const t = pathNames[i + 1];
-      edgeTypes.push(
-        edgeLookup.get(`${s}:${t}`) ??
-          edgeLookup.get(`${t}:${s}`) ??
-          "unknown",
-      );
+      if (i < e.pathRelTypes.length) {
+        edgeTypes.push(e.pathRelTypes[i]);
+      } else {
+        // Fallback to edge lookup (should not happen in practice)
+        const s = pathNames[i];
+        const t = pathNames[i + 1];
+        const types = edgeLookup.get(`${s}:${t}`) ?? edgeLookup.get(`${t}:${s}`);
+        edgeTypes.push(types?.[0] ?? "unknown");
+      }
     }
     return {
       entities: pathNames,
@@ -72,7 +78,7 @@ export class SqlGraphBackend implements GraphBackend {
   async resolveEntities(names: string[]): Promise<ResolvedEntity[]> {
     if (names.length === 0) return [];
 
-    // Deduplicate by LOWER
+    // Deduplicate by LOWER, keeping first occurrence as the canonical requested name
     const seen = new Set<string>();
     const uniqueNames: string[] = [];
     for (const name of names) {
@@ -81,6 +87,12 @@ export class SqlGraphBackend implements GraphBackend {
         seen.add(lower);
         uniqueNames.push(name);
       }
+    }
+
+    // Map from lowercase → original requested name (for requestedName tracking)
+    const lowerToRequested = new Map<string, string>();
+    for (const name of uniqueNames) {
+      lowerToRequested.set(name.toLowerCase(), name);
     }
 
     const normalised = uniqueNames.map((n) => n.toLowerCase());
@@ -101,12 +113,14 @@ export class SqlGraphBackend implements GraphBackend {
 
     const resolved = new Map<string, ResolvedEntity>();
     for (const row of exactResult.rows) {
-      resolved.set(row.name.toLowerCase(), {
+      const lower = row.name.toLowerCase();
+      resolved.set(lower, {
         id: row.id,
         name: row.name,
         type: row.type ?? "unknown",
         description: row.description ?? undefined,
         mentionCount: row.mention_count,
+        requestedName: lowerToRequested.get(lower) ?? row.name,
       });
     }
 
@@ -123,7 +137,9 @@ export class SqlGraphBackend implements GraphBackend {
         }>(
           `SELECT id::text, name, type, description, mention_count
            FROM entities
-           WHERE LOWER(name) LIKE $1 || '%'`,
+           WHERE LOWER(name) LIKE $1 || '%'
+           ORDER BY name, id
+           LIMIT 2`,
           [name.toLowerCase()],
         );
         // Accept only unambiguous (exactly 1) prefix match
@@ -135,6 +151,7 @@ export class SqlGraphBackend implements GraphBackend {
             type: row.type ?? "unknown",
             description: row.description ?? undefined,
             mentionCount: row.mention_count,
+            requestedName: name,
           });
         }
       }
@@ -177,7 +194,8 @@ export class SqlGraphBackend implements GraphBackend {
         SELECT e.id, e.name, e.type, e.mention_count,
                0 AS depth,
                ARRAY[e.id] AS path,
-               ARRAY[e.name::text] AS path_names
+               ARRAY[e.name::text] AS path_names,
+               ARRAY[]::text[] AS path_rel_types
         FROM entities e
         WHERE e.id = ANY($1::uuid[])
 
@@ -186,7 +204,8 @@ export class SqlGraphBackend implements GraphBackend {
         SELECT e.id, e.name, e.type, e.mention_count,
                eg.depth + 1,
                eg.path || e.id,
-               eg.path_names || e.name::text
+               eg.path_names || e.name::text,
+               eg.path_rel_types || er.relationship_type::text
         FROM entity_graph eg
         JOIN entity_relationships er
           ON er.source_id = eg.id OR er.target_id = eg.id
@@ -200,7 +219,7 @@ export class SqlGraphBackend implements GraphBackend {
           ${relTypeClause}
       )
       SELECT * FROM (
-        SELECT DISTINCT ON (id) id::text, name, type, mention_count, depth, path_names
+        SELECT DISTINCT ON (id) id::text, name, type, mention_count, depth, path_names, path_rel_types
         FROM entity_graph
         ORDER BY id, depth ASC
       ) deduped
@@ -222,6 +241,7 @@ export class SqlGraphBackend implements GraphBackend {
       mention_count: number;
       depth: number;
       path_names: string[];
+      path_rel_types: string[];
     };
     type RelationshipRow = {
       source_name: string;
@@ -244,16 +264,29 @@ export class SqlGraphBackend implements GraphBackend {
 
       const entityNames = entityRows.map((r) => r.name);
 
-      // Fetch relationships between discovered entities
-      const relResult = await client.query<RelationshipRow>(
-        `SELECT es.name AS source_name, et.name AS target_name, er.relationship_type
-         FROM entity_relationships er
-         JOIN entities es ON er.source_id = es.id
-         JOIN entities et ON er.target_id = et.id
-         WHERE es.name = ANY($1::text[])
-           AND et.name = ANY($1::text[])`,
-        [entityNames],
-      );
+      // Fetch relationships between discovered entities, applying the same type filter
+      const relQuery =
+        params.relationshipTypes.length > 0
+          ? {
+              sql: `SELECT es.name AS source_name, et.name AS target_name, er.relationship_type
+                    FROM entity_relationships er
+                    JOIN entities es ON er.source_id = es.id
+                    JOIN entities et ON er.target_id = et.id
+                    WHERE es.name = ANY($1::text[])
+                      AND et.name = ANY($1::text[])
+                      AND er.relationship_type = ANY($2::text[])`,
+              params: [entityNames, params.relationshipTypes] as unknown[],
+            }
+          : {
+              sql: `SELECT es.name AS source_name, et.name AS target_name, er.relationship_type
+                    FROM entity_relationships er
+                    JOIN entities es ON er.source_id = es.id
+                    JOIN entities et ON er.target_id = et.id
+                    WHERE es.name = ANY($1::text[])
+                      AND et.name = ANY($1::text[])`,
+              params: [entityNames] as unknown[],
+            };
+      const relResult = await client.query<RelationshipRow>(relQuery.sql, relQuery.params);
       relRows = relResult.rows;
 
       await client.query("COMMIT");
@@ -267,6 +300,7 @@ export class SqlGraphBackend implements GraphBackend {
         isSeed: seedIdSet.has(r.id?.toLowerCase()),
         mentionCount: r.mention_count ?? undefined,
         pathNames: Array.isArray(r.path_names) ? r.path_names : [r.name],
+        pathRelTypes: Array.isArray(r.path_rel_types) ? r.path_rel_types : [],
       }));
 
       const relationships: Edge[] = relRows.map((r) => ({
@@ -408,17 +442,27 @@ export class SqlGraphBackend implements GraphBackend {
       direction: string;
       description: string | null;
     }>(
-      `SELECT et.name AS entity_name, er.relationship_type AS relationship,
-              'outbound' AS direction, er.description
-       FROM entity_relationships er
-       JOIN entities et ON er.target_id = et.id
-       WHERE er.source_id = $1::uuid
-       UNION ALL
-       SELECT es.name AS entity_name, er.relationship_type AS relationship,
-              'inbound' AS direction, er.description
-       FROM entity_relationships er
-       JOIN entities es ON er.source_id = es.id
-       WHERE er.target_id = $1::uuid
+      `SELECT entity_name, relationship, direction, description
+       FROM (
+         SELECT et.name AS entity_name,
+                er.relationship_type AS relationship,
+                'outbound' AS direction,
+                er.description,
+                er.created_at
+         FROM entity_relationships er
+         JOIN entities et ON er.target_id = et.id
+         WHERE er.source_id = $1::uuid
+         UNION ALL
+         SELECT es.name AS entity_name,
+                er.relationship_type AS relationship,
+                'inbound' AS direction,
+                er.description,
+                er.created_at
+         FROM entity_relationships er
+         JOIN entities es ON er.source_id = es.id
+         WHERE er.target_id = $1::uuid
+       ) AS all_relationships
+       ORDER BY created_at DESC
        LIMIT $2`,
       [entityId, limit],
     );

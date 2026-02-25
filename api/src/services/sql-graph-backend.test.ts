@@ -97,6 +97,8 @@ describe("SqlGraphBackend.resolveEntities", () => {
     const result = await backend.resolveEntities(["Auth"]);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("AuthService");
+    // requestedName tracks the original input, not the resolved canonical name
+    expect(result[0].requestedName).toBe("Auth");
   });
 
   it("rejects prefix match when multiple results (ambiguous)", async () => {
@@ -248,6 +250,7 @@ describe("SqlGraphBackend.traverse", () => {
               mention_count: 2,
               depth: 0,
               path_names: ["EntityA"],
+              path_rel_types: [],
             },
             {
               id: "entity-b-uuid",
@@ -256,6 +259,7 @@ describe("SqlGraphBackend.traverse", () => {
               mention_count: 1,
               depth: 1,
               path_names: ["EntityA", "EntityB"],
+              path_rel_types: ["calls"],
             },
           ],
         },
@@ -297,6 +301,7 @@ describe("SqlGraphBackend.traverse", () => {
       mention_count: 0,
       depth: i,
       path_names: [`Entity${i}`],
+      path_rel_types: [] as string[],
     }));
 
     const pool = makePoolWithClient(
@@ -350,7 +355,7 @@ describe("SqlGraphBackend.traverse", () => {
     expect(result.meta.warnings).toContain("Graph traversal timed out; returning partial results");
   });
 
-  it("constructs paths correctly", async () => {
+  it("constructs paths correctly using path_rel_types from CTE", async () => {
     const pool = makePoolWithClient(
       [],
       [
@@ -358,9 +363,9 @@ describe("SqlGraphBackend.traverse", () => {
         { rows: [] },  // SET LOCAL
         {
           rows: [
-            { id: "a", name: "A", type: "x", mention_count: 0, depth: 0, path_names: ["A"] },
-            { id: "b", name: "B", type: "x", mention_count: 0, depth: 1, path_names: ["A", "B"] },
-            { id: "c", name: "C", type: "x", mention_count: 0, depth: 2, path_names: ["A", "B", "C"] },
+            { id: "a", name: "A", type: "x", mention_count: 0, depth: 0, path_names: ["A"], path_rel_types: [] },
+            { id: "b", name: "B", type: "x", mention_count: 0, depth: 1, path_names: ["A", "B"], path_rel_types: ["r1"] },
+            { id: "c", name: "C", type: "x", mention_count: 0, depth: 2, path_names: ["A", "B", "C"], path_rel_types: ["r1", "r2"] },
           ],
         },
         {
@@ -384,6 +389,7 @@ describe("SqlGraphBackend.traverse", () => {
     // Leaf path is A -> B -> C (B and A are prefixes, so not leaves)
     expect(result.paths).toHaveLength(1);
     expect(result.paths[0].entities).toEqual(["A", "B", "C"]);
+    // Relationships come from path_rel_types tracked in the CTE, not from edge lookup
     expect(result.paths[0].relationships).toEqual(["r1", "r2"]);
     expect(result.paths[0].depth).toBe(2);
   });
