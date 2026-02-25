@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { cmdQuery } from "./query.js";
+import { cmdQuery, resolveTemporalShorthand, parseFilterField } from "./query.js";
 
 describe("query command", () => {
   let fetchMock: typeof globalThis.fetch;
@@ -70,6 +70,84 @@ describe("query command", () => {
       lang: "ts",
     });
 
+  });
+
+  it("should send DSL filter when --since is provided", async () => {
+    let sentFilter: Record<string, unknown> | undefined;
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      sentFilter = body.filter;
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "test", since: "2025-01-01T00:00:00Z" });
+
+    expect(sentFilter).toBeDefined();
+    expect((sentFilter as { conditions: unknown[] }).conditions).toHaveLength(1);
+    const cond = (sentFilter as { conditions: Array<Record<string, unknown>> }).conditions[0];
+    expect(cond.field).toBe("ingestedAt");
+    expect(cond.op).toBe("gte");
+    expect(cond.value).toBe("2025-01-01T00:00:00Z");
+    expect(cond.alias).toBe("d");
+  });
+
+  it("should send DSL filter with both --since and --until", async () => {
+    let sentFilter: Record<string, unknown> | undefined;
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      sentFilter = body.filter;
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "test", since: "2025-01-01T00:00:00Z", until: "2025-12-31T23:59:59Z" });
+
+    expect((sentFilter as { conditions: unknown[] }).conditions).toHaveLength(2);
+  });
+
+  it("should send DSL filter from --filterField", async () => {
+    let sentFilter: Record<string, unknown> | undefined;
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      sentFilter = body.filter;
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "test", filterField: ["docType:eq:code"] });
+
+    expect(sentFilter).toBeDefined();
+    const cond = (sentFilter as { conditions: Array<Record<string, unknown>> }).conditions[0];
+    expect(cond.field).toBe("docType");
+    expect(cond.op).toBe("eq");
+    expect(cond.value).toBe("code");
+  });
+
+  it("should use filterCombine to set combine key", async () => {
+    let sentFilter: Record<string, unknown> | undefined;
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      sentFilter = body.filter;
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "test", filterField: ["docType:eq:code", "lang:eq:ts"], filterCombine: "or" });
+
+    expect((sentFilter as { combine: string }).combine).toBe("or");
   });
 
   it("should pass custom minScore", async () => {
@@ -575,5 +653,97 @@ describe("query command", () => {
     expect(files).toContain("dup (1).pdf");
 
     await fs.rm(openDir, { recursive: true, force: true });
+  });
+});
+
+describe("resolveTemporalShorthand", () => {
+  it("resolves 'today' to start of today", () => {
+    const result = resolveTemporalShorthand("today");
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    expect(result).toBe(today.toISOString().replace(/\.\d{3}Z$/, ".000Z"));
+  });
+
+  it("resolves 'yesterday' to start of yesterday", () => {
+    const result = resolveTemporalShorthand("yesterday");
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    expect(result).toBe(yesterday.toISOString().replace(/\.\d{3}Z$/, ".000Z"));
+  });
+
+  it("resolves '7d' to approximately 7 days ago", () => {
+    const before = Date.now();
+    const result = resolveTemporalShorthand("7d");
+    const after = Date.now();
+    const parsed = new Date(result).getTime();
+    const expectedApprox = before - 7 * 24 * 60 * 60 * 1000;
+    expect(parsed).toBeGreaterThanOrEqual(expectedApprox - 1000);
+    expect(parsed).toBeLessThanOrEqual(after - 6 * 24 * 60 * 60 * 1000);
+  });
+
+  it("resolves '30d' to approximately 30 days ago", () => {
+    const result = resolveTemporalShorthand("30d");
+    const parsed = new Date(result).getTime();
+    const approx = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    expect(Math.abs(parsed - approx)).toBeLessThan(5000);
+  });
+
+  it("resolves '1y' to approximately 1 year ago", () => {
+    const result = resolveTemporalShorthand("1y");
+    const parsed = new Date(result).getTime();
+    const approx = new Date();
+    approx.setFullYear(approx.getFullYear() - 1);
+    expect(Math.abs(parsed - approx.getTime())).toBeLessThan(5000);
+  });
+
+  it("passes through ISO 8601 datetime unchanged", () => {
+    const iso = "2025-01-15T12:00:00Z";
+    expect(resolveTemporalShorthand(iso)).toBe(iso);
+  });
+
+  it("passes through ISO 8601 date unchanged", () => {
+    const iso = "2025-06-01";
+    expect(resolveTemporalShorthand(iso)).toBe(iso);
+  });
+
+  it("throws on unrecognised value containing 'Unrecognised'", () => {
+    expect(() => resolveTemporalShorthand("badvalue")).toThrow("Unrecognised");
+  });
+
+  it("throws on empty string", () => {
+    expect(() => resolveTemporalShorthand("")).toThrow();
+  });
+});
+
+describe("parseFilterField", () => {
+  it("parses field:op:value", () => {
+    const cond = parseFilterField("docType:eq:code");
+    expect(cond).toEqual({ field: "docType", op: "eq", value: "code" });
+  });
+
+  it("parses field:op for isNull", () => {
+    const cond = parseFilterField("enrichmentStatus:isNull");
+    expect(cond).toEqual({ field: "enrichmentStatus", op: "isNull" });
+  });
+
+  it("parses field:op for isNotNull", () => {
+    const cond = parseFilterField("lang:isNotNull");
+    expect(cond).toEqual({ field: "lang", op: "isNotNull" });
+  });
+
+  it("value may contain colons", () => {
+    const cond = parseFilterField("path:eq:src/lib:utils.ts");
+    expect(cond.field).toBe("path");
+    expect(cond.op).toBe("eq");
+    expect(cond.value).toBe("src/lib:utils.ts");
+  });
+
+  it("throws when format is missing a colon", () => {
+    expect(() => parseFilterField("nodots")).toThrow("Invalid --filterField");
+  });
+
+  it("throws when op requires value but none given", () => {
+    expect(() => parseFilterField("docType:eq")).toThrow("requires a value");
   });
 });
