@@ -171,6 +171,107 @@ Examples:
 Respond ONLY with valid JSON (the FilterDSL object) or the literal null.
 Query: "`;
 
+/**
+ * OpenAI-specific system prompt. When using structured output (json_schema
+ * response_format), the model cannot return the literal `null` token — instead
+ * it must return a valid object. An empty `conditions` array signals "no
+ * applicable filters" and is handled identically to a null response.
+ */
+const OPENAI_SYSTEM_PROMPT = `You are a structured filter extractor. Given a natural-language search query, output a FilterDSL JSON object that captures any explicit attribute or temporal constraints.
+
+Available fields and allowed operators:
+- docType: document type string (ops: eq, ne, in, notIn)
+- repoId: repository identifier string (ops: eq, ne, in, notIn)
+- lang: programming language code — use short codes only: "ts" (TypeScript), "js" (JavaScript), "py" (Python), "go" (Go), "rs" (Rust), "java" (Java), "rb" (Ruby), "cpp" (C++) (ops: eq, ne, in, notIn)
+- path: file path prefix string (ops: eq, ne, in, notIn)
+- mimeType: MIME type string (ops: eq, ne, in, notIn)
+- ingestedAt: ingestion timestamp ISO 8601 date string, e.g. "2023-01-01" (ops: eq, ne, gt, gte, lt, lte, between, notBetween, in, notIn, isNull, isNotNull)
+- createdAt: creation timestamp ISO 8601 date string (ops: eq, ne, gt, gte, lt, lte, between, notBetween, in, notIn, isNull, isNotNull)
+- updatedAt: last update timestamp ISO 8601 date string (ops: eq, ne, gt, gte, lt, lte, between, notBetween, in, notIn, isNull, isNotNull)
+
+Rules:
+- Use an empty conditions array when no filter constraints are present in the query.
+- Always output "combine": "and" or "combine": "or" (use "and" when unsure).
+- Use scalar conditions for single-value comparisons, range conditions for temporal spans, and list conditions for sets.
+
+Examples:
+- "all typescript files from 2023" → {"conditions":[{"field":"lang","op":"eq","value":"ts"},{"field":"ingestedAt","op":"between","range":{"low":"2023-01-01","high":"2023-12-31"}}],"combine":"and"}
+- "python or javascript code" → {"conditions":[{"field":"lang","op":"in","values":["py","js"]}],"combine":"and"}
+- "openai invoices from 2023 and 2024" → {"conditions":[{"field":"ingestedAt","op":"between","range":{"low":"2023-01-01","high":"2024-12-31"}}],"combine":"and"}
+- "how does authentication work" → {"conditions":[],"combine":"and"}`;
+
+const ALLOWED_FIELDS = [
+  "docType",
+  "repoId",
+  "lang",
+  "path",
+  "mimeType",
+  "ingestedAt",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+/**
+ * JSON Schema for FilterDSL used with OpenAI structured output.
+ * Conditions are a discriminated union keyed on `op`.
+ */
+const FILTER_DSL_JSON_SCHEMA = {
+  type: "object",
+  required: ["conditions", "combine"],
+  additionalProperties: false,
+  properties: {
+    conditions: {
+      type: "array",
+      items: {
+        anyOf: [
+          {
+            type: "object",
+            required: ["field", "op", "value"],
+            additionalProperties: false,
+            properties: {
+              field: { type: "string", enum: ALLOWED_FIELDS },
+              op: {
+                type: "string",
+                enum: ["eq", "ne", "gt", "gte", "lt", "lte", "isNull", "isNotNull"],
+              },
+              value: { type: "string" },
+            },
+          },
+          {
+            type: "object",
+            required: ["field", "op", "values"],
+            additionalProperties: false,
+            properties: {
+              field: { type: "string", enum: ALLOWED_FIELDS },
+              op: { type: "string", enum: ["in", "notIn"] },
+              values: { type: "array", items: { type: "string" } },
+            },
+          },
+          {
+            type: "object",
+            required: ["field", "op", "range"],
+            additionalProperties: false,
+            properties: {
+              field: { type: "string", enum: ALLOWED_FIELDS },
+              op: { type: "string", enum: ["between", "notBetween"] },
+              range: {
+                type: "object",
+                required: ["low", "high"],
+                additionalProperties: false,
+                properties: {
+                  low: { type: "string" },
+                  high: { type: "string" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+    combine: { type: "string", enum: ["and", "or"] },
+  },
+} as const;
+
 // ---------------------------------------------------------------------------
 // LLM call and response parsing
 // ---------------------------------------------------------------------------
@@ -284,9 +385,19 @@ async function callLlm(query: string): Promise<FilterDSL | null> {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            { role: "system", content: OPENAI_SYSTEM_PROMPT },
+            { role: "user", content: `Query: "${escapedQuery}"` },
+          ],
           temperature: 0,
-          response_format: { type: "json_object" },
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "filter_dsl",
+              strict: true,
+              schema: FILTER_DSL_JSON_SCHEMA,
+            },
+          },
         }),
         signal: controller.signal,
       });
@@ -351,7 +462,9 @@ export async function extractStructuredFilter(
     const latencyMs = Date.now() - parseStart;
 
     if (result === null || result.conditions.length === 0) {
-      // LLM responded cleanly but found no filters — not a circuit-breaker failure
+      // LLM responded cleanly but found no filters — still a successful call;
+      // reset breaker so prior failures don't accumulate across clean responses.
+      recordParserSuccess();
       console.log(
         JSON.stringify({
           event: "filter_parser",

@@ -229,7 +229,7 @@ describe("extractStructuredFilter — OpenAI success cases", () => {
     expect(result!.conditions[0].value).toBe("py");
   });
 
-  it("calls OpenAI /chat/completions endpoint", async () => {
+  it("calls OpenAI /chat/completions endpoint with json_schema response_format", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -249,6 +249,40 @@ describe("extractStructuredFilter — OpenAI success cases", () => {
       "https://api.openai.com/v1/chat/completions",
       expect.objectContaining({ method: "POST" }),
     );
+
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(requestInit.body as string) as {
+      response_format: { type: string; json_schema: { name: string; strict: boolean } };
+      messages: Array<{ role: string }>;
+    };
+
+    // Must use structured output format
+    expect(body.response_format.type).toBe("json_schema");
+    expect(body.response_format.json_schema.name).toBe("filter_dsl");
+    expect(body.response_format.json_schema.strict).toBe(true);
+
+    // Must use system + user message pattern
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[1].role).toBe("user");
+  });
+
+  it("treats empty conditions array from OpenAI as no-filter result", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: '{"conditions":[],"combine":"and"}',
+            },
+          },
+        ],
+      }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await extractStructuredFilter(makeRequest("how does authentication work"));
+    expect(result).toBeNull();
   });
 });
 
@@ -400,6 +434,27 @@ describe("extractStructuredFilter — circuit breaker", () => {
     const result = await extractStructuredFilter(makeRequest("another query"));
     expect(result).toBeNull();
     expect(fetchMock.mock.calls.length).toBe(callCountBeforeOpen);
+  });
+
+  it("resets circuit breaker on no_filter response (empty conditions) — prevents failure accumulation", async () => {
+    // Trigger 3 failures
+    const failingFetch = vi.fn().mockRejectedValue(new Error("fail"));
+    vi.stubGlobal("fetch", failingFetch);
+    for (let i = 0; i < 3; i++) {
+      await extractStructuredFilter(makeRequest("query"));
+    }
+    expect(_filterParserCircuitBreaker.failures).toBe(3);
+
+    // A clean no-filter response should reset the failure count
+    const noFilterFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ response: '{"conditions":[],"combine":"and"}' }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", noFilterFetch);
+
+    await extractStructuredFilter(makeRequest("how does auth work"));
+    expect(_filterParserCircuitBreaker.failures).toBe(0);
+    expect(_filterParserCircuitBreaker.state).toBe("closed");
   });
 
   it("resets circuit breaker on success", async () => {
