@@ -193,7 +193,7 @@ function parseAndValidateFilterResponse(text: string): FilterDSL | null {
     throw new Error("Filter parser output missing conditions array");
   }
 
-  const candidate = obj as FilterDSL;
+  const candidate = obj as unknown as FilterDSL;
 
   // Validate through translateFilter — throws FilterValidationError on unknown field/operator
   try {
