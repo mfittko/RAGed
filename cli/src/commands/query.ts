@@ -470,7 +470,20 @@ export async function cmdQuery(options: QueryOptions, deps: QueryCommandDeps = {
   const pathPrefix = options.pathPrefix;
   const lang = options.lang;
 
-  const strategy = options.strategy;
+  const rawStrategy = options.strategy?.trim();
+  let strategy: string | undefined;
+  if (!rawStrategy || rawStrategy === "auto") {
+    strategy = undefined;
+  } else {
+    const allowedStrategies = new Set(["semantic", "metadata", "graph", "hybrid"]);
+    if (!allowedStrategies.has(rawStrategy)) {
+      logger.error(
+        `Error: Invalid --strategy value "${rawStrategy}". Expected one of: semantic, metadata, graph, hybrid, or "auto".`,
+      );
+      process.exit(2);
+    }
+    strategy = rawStrategy;
+  }
   const verbose = options.verbose === true;
 
   if (!q) {
@@ -581,7 +594,7 @@ export async function cmdQuery(options: QueryOptions, deps: QueryCommandDeps = {
       const out = await query(api, collectionName, queryText, topK, minScore, effectiveFilter as Record<string, unknown> | undefined, strategy, token);
       const items = (out?.results ?? []) as QueryResultItem[];
       const results = items.map((item) => ({ ...item, collection: collectionName, routing: out.routing })) as RankedQueryResult[];
-      return { results, collection: collectionName, routing: out.routing, graph: out.graph } as CollectionQueryResponse & { results: RankedQueryResult[] };
+      return { ...out, results, collection: collectionName } as CollectionQueryResponse & { results: RankedQueryResult[] };
     })
   );
 

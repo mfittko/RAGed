@@ -93,8 +93,7 @@ Semantic search over chunks with multi-strategy routing.
     "lang": "ts",
     "path": "src/"
   },
-  "graphExpand": true,
-  "strategy": "semantic"
+  "strategy": "graph"
 }
 ```
 
@@ -151,14 +150,18 @@ Semantic search over chunks with multi-strategy routing.
       "entityCount": 1,
       "capped": false,
       "timedOut": false,
-      "warnings": []
+      "warnings": [],
+      "seedEntities": ["abc123"],
+      "seedSource": "results",
+      "maxDepthUsed": 2,
+      "entityCap": 50,
+      "timeLimitMs": 3000
     }
   },
   "routing": {
-    "strategy": "semantic",
-    "method": "rule",
-    "confidence": 0.9,
-    "rule": "keyword_match",
+    "strategy": "graph",
+    "method": "explicit",
+    "confidence": 1.0,
     "durationMs": 12
   }
 }
@@ -172,7 +175,7 @@ Semantic search over chunks with multi-strategy routing.
 |-------|------|----------|-------------|
 | `ok` | `true` | always | Success indicator |
 | `results` | `QueryResultItem[]` | always | Ranked result items |
-| `graph` | `GraphResult` | when strategy is `graph` or `hybrid` | Entity graph data |
+| `graph` | `GraphResult` | when strategy is `graph` or `hybrid`, or when `graphExpand` / `graph` params are provided | Entity graph data |
 | `routing` | `RoutingDecision` | always | How the strategy was selected |
 
 **`results[].` per-item fields:**
@@ -203,8 +206,15 @@ Semantic search over chunks with multi-strategy routing.
 | `capped` | boolean | Whether the entity cap was reached |
 | `timedOut` | boolean | Whether traversal hit the time limit |
 | `warnings` | string[] | Any non-fatal warnings from graph traversal |
+| `seedEntities` | string[] | IDs of the seed entities used to start traversal |
+| `seedSource` | string | How seeds were chosen (`results` or `explicit`) |
+| `maxDepthUsed` | number | Maximum graph depth actually traversed |
+| `entityCap` | number | Maximum number of entities allowed in this traversal |
+| `timeLimitMs` | number | Wall-clock time limit (ms) configured for this traversal |
 
-> **Note:** When the router selects `metadata` strategy, `score` is always `1.0` and `text` is absent from result items.
+> **Note:** Additional implementation-specific `graph.meta` fields may be returned; clients should ignore unknown keys for forward compatibility.
+
+> **Note:** When the router selects `metadata` strategy, `score` is always `1.0`. Result items may include a `text` field (for example, containing chunk text), but clients should not rely on its absence and should not use `score` for relevance ranking in this strategy.
 
 ---
 

@@ -38,6 +38,13 @@ export interface GraphMeta {
   capped: boolean;
   timedOut: boolean;
   warnings: string[];
+  seedEntities?: string[];
+  seedSource?: string;
+  maxDepthUsed?: number;
+  entityCap?: number;
+  timeLimitMs?: number;
+  /** Allow additional metadata fields returned by the server that are not yet explicitly modeled. */
+  [key: string]: unknown;
 }
 
 export interface GraphEntity {

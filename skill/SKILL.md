@@ -102,9 +102,7 @@ curl -s -X POST "$RAGED_URL/query" \
     "query": "error handling",
     "topK": 5,
     "filter": {
-      "must": [
-        {"key": "repoId", "match": {"value": "my-repo"}}
-      ]
+      "repoId": "my-repo"
     }
   }' | jq '.results[] | {score, source, text: (.text | .[0:200])}'
 ```
@@ -119,9 +117,7 @@ curl -s -X POST "$RAGED_URL/query" \
     "query": "database connection",
     "topK": 5,
     "filter": {
-      "must": [
-        {"key": "lang", "match": {"value": "ts"}}
-      ]
+      "lang": "ts"
     }
   }' | jq '.results[] | {score, source, text: (.text | .[0:200])}'
 ```
@@ -136,14 +132,12 @@ curl -s -X POST "$RAGED_URL/query" \
     "query": "route handler",
     "topK": 5,
     "filter": {
-      "must": [
-        {"key": "path", "match": {"text": "src/api/"}}
-      ]
+      "path": "src/api/"
     }
   }' | jq '.results[] | {score, source, text: (.text | .[0:200])}'
 ```
 
-Combine multiple filters (AND logic) by adding entries to the `must` array.
+Combine multiple filters (AND logic) by adding more keys to the `filter` object.
 
 ### Query Parameters
 
@@ -187,7 +181,7 @@ Response includes vector results, graph data, and routing metadata:
     ],
     "paths": [],
     "documents": [],
-    "meta": { "entityCount": 2, "capped": false, "timedOut": false, "warnings": [] }
+    "meta": { "entityCount": 2, "capped": false, "timedOut": false, "warnings": [], "seedEntities": ["a1b2c3"], "seedSource": "results", "maxDepthUsed": 2, "entityCap": 50, "timeLimitMs": 3000 }
   },
   "routing": {
     "strategy": "graph",

@@ -654,6 +654,172 @@ describe("query command", () => {
 
     await fs.rm(openDir, { recursive: true, force: true });
   });
+
+  it("should send strategy in request body when --strategy is provided", async () => {
+    let sentBody: Record<string, unknown> = {};
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ results: [], routing: { strategy: "graph", method: "explicit", confidence: 1.0, durationMs: 5 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "auth", strategy: "graph" });
+
+    expect(sentBody.strategy).toBe("graph");
+  });
+
+  it("should omit strategy from request body when --strategy is not provided", async () => {
+    let sentBody: Record<string, unknown> = {};
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ results: [], routing: { strategy: "semantic", method: "default", confidence: 0.5, durationMs: 2 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "auth" });
+
+    expect(sentBody.strategy).toBeUndefined();
+  });
+
+  it("should omit strategy from request body when --strategy is 'auto'", async () => {
+    let sentBody: Record<string, unknown> = {};
+
+    globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ results: [], routing: { strategy: "semantic", method: "default", confidence: 0.5, durationMs: 2 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await cmdQuery({ q: "auth", strategy: "auto" });
+
+    expect(sentBody.strategy).toBeUndefined();
+  });
+
+  it("should exit with error for invalid --strategy value", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = process.exit;
+    let exitCode = 0;
+    process.exit = ((code: number) => { exitCode = code; throw new Error("exit"); }) as never;
+
+    try {
+      await cmdQuery({ q: "auth", strategy: "invalid-strategy" });
+    } catch {
+      // expected
+    }
+
+    expect(exitCode).toBe(2);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid --strategy"));
+    process.exit = exitSpy;
+  });
+
+  it("should NOT show routing line for semantic strategy without --verbose", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        results: [{ id: "a:0", text: "some text", score: 0.85, source: "a.md" }],
+        routing: { strategy: "semantic", method: "rule", confidence: 0.9, durationMs: 8 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    await cmdQuery({ q: "auth" });
+
+    const output = infoSpy.mock.calls.map((args) => String(args[0] ?? ""));
+    expect(output.some(line => line.startsWith("routing:"))).toBe(false);
+  });
+
+  it("should show routing line for semantic strategy with --verbose", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        results: [{ id: "a:0", text: "some text", score: 0.85, source: "a.md" }],
+        routing: { strategy: "semantic", method: "rule", confidence: 0.9, durationMs: 8 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    await cmdQuery({ q: "auth", verbose: true });
+
+    const output = infoSpy.mock.calls.map((args) => String(args[0] ?? ""));
+    expect(output).toContain("routing: semantic  (rule, 8ms)");
+  });
+
+  it("should show routing line and filter match for metadata strategy", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        results: [{ id: "a:0", score: 1.0, source: "a.ts" }],
+        routing: { strategy: "metadata", method: "rule", confidence: 1.0, durationMs: 3 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    await cmdQuery({ q: "files", lang: "ts" });
+
+    const output = infoSpy.mock.calls.map((args) => String(args[0] ?? ""));
+    expect(output).toContain("routing: metadata  (rule, 3ms)");
+    expect(output).toContain("filter match: lang=ts");
+  });
+
+  it("should show routing line and graph documents section for graph strategy", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        results: [{ id: "a:0", text: "auth handler code", score: 0.82, source: "auth.ts" }],
+        routing: { strategy: "graph", method: "explicit", confidence: 1.0, durationMs: 11 },
+        graph: {
+          entities: [{ name: "AuthService", type: "class", depth: 0, isSeed: true }],
+          relationships: [],
+          paths: [],
+          documents: [
+            { documentId: "d1", source: "auth.ts", entityName: "AuthService", mentionCount: 3 },
+            { documentId: "d2", source: "auth.test.ts", entityName: "AuthService", mentionCount: 1 },
+          ],
+          meta: { entityCount: 1, capped: false, timedOut: false, warnings: [] },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    await cmdQuery({ q: "auth flow", strategy: "graph" });
+
+    const output = infoSpy.mock.calls.map((args) => String(args[0] ?? ""));
+    expect(output).toContain("routing: graph  (explicit, 11ms)");
+    expect(output).toContain("--- graph documents (2) ---");
+    expect(output).toContain("[G1]  auth.ts");
+    expect(output).toContain("[G2]  auth.test.ts");
+  });
+
+  it("should suppress graph documents section when graph.documents is empty", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        results: [{ id: "a:0", text: "some text", score: 0.75, source: "a.ts" }],
+        routing: { strategy: "graph", method: "rule", confidence: 0.9, durationMs: 7 },
+        graph: {
+          entities: [],
+          relationships: [],
+          paths: [],
+          documents: [],
+          meta: { entityCount: 0, capped: false, timedOut: false, warnings: [] },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    await cmdQuery({ q: "auth", strategy: "graph" });
+
+    const output = infoSpy.mock.calls.map((args) => String(args[0] ?? ""));
+    expect(output.some(line => line.startsWith("--- graph documents"))).toBe(false);
+  });
 });
 
 describe("resolveTemporalShorthand", () => {
