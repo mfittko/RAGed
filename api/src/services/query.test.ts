@@ -469,6 +469,56 @@ describe("query service — LLM filter extraction integration", () => {
     // No extra filter conditions in the WHERE clause
     expect(sql).not.toContain("$5");
   });
+
+  // Explicit coverage for issue #130 required example queries
+  it("applies inferred temporal range filter for 'all openai invoices from 2023 and 2024'", async () => {
+    const { extractStructuredFilter } = await import("./query-filter-parser.js");
+    (extractStructuredFilter as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      conditions: [
+        {
+          field: "ingestedAt",
+          op: "between",
+          range: { low: "2023-01-01", high: "2024-12-31" },
+        },
+      ],
+      combine: "and",
+    });
+
+    const queryMock = vi.fn(async () => ({ rows: [] }));
+    const { getPool } = await import("../db.js");
+    (getPool as any).mockReturnValueOnce({ query: queryMock });
+
+    const result = await query({ query: "all openai invoices from 2023 and 2024" });
+
+    expect(result.routing.inferredFilter).toBe(true);
+    const firstCall = queryMock.mock.calls[0] as unknown as unknown[];
+    const sql = String(firstCall[0] ?? "");
+    // between on ingestedAt expands to >= low AND <= high
+    expect(sql).toContain("d.ingested_at >= $5 AND d.ingested_at <= $6");
+  });
+
+  it("applies multi-constraint inferred filter for 'python files ingested in 2024'", async () => {
+    const { extractStructuredFilter } = await import("./query-filter-parser.js");
+    (extractStructuredFilter as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      conditions: [
+        { field: "lang", op: "eq", value: "py" },
+        { field: "ingestedAt", op: "gte", value: "2024-01-01" },
+      ],
+      combine: "and",
+    });
+
+    const queryMock = vi.fn(async () => ({ rows: [] }));
+    const { getPool } = await import("../db.js");
+    (getPool as any).mockReturnValueOnce({ query: queryMock });
+
+    const result = await query({ query: "python files ingested in 2024" });
+
+    expect(result.routing.inferredFilter).toBe(true);
+    const firstCall = queryMock.mock.calls[0] as unknown as unknown[];
+    const sql = String(firstCall[0] ?? "");
+    expect(sql).toContain("c.lang = $5");
+    expect(sql).toContain("d.ingested_at >= $6");
+  });
 });
 
 describe("query service — hybrid dispatch", () => {
